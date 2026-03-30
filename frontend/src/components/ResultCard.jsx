@@ -3,6 +3,8 @@ export default function ResultCard({ result }) {
     return null;
   }
 
+  const snippetLines = result.snippet ? result.snippet.split("\n") : [];
+
   return (
     <section className="card">
       <div className="result-header">
@@ -32,10 +34,30 @@ export default function ResultCard({ result }) {
       </dl>
 
       <div className="snippet-block">
-        <h3>Snippet</h3>
-        <pre>{result.snippet || "No HTML snippet returned."}</pre>
+        <div className="snippet-header">
+          <h3>Snippet</h3>
+          <span className="snippet-language">HTML</span>
+        </div>
+
+        <div className="snippet-viewer" aria-label="HTML snippet viewer">
+          {snippetLines.length ? (
+            <pre className="snippet-code">
+              <code>
+                {snippetLines.map((line, index) => (
+                  <span className="snippet-line" key={`${index}-${line}`}>
+                    <span className="snippet-line-number" aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    <span className="snippet-line-content">{line || " "}</span>
+                  </span>
+                ))}
+              </code>
+            </pre>
+          ) : (
+            <div className="snippet-empty">No HTML snippet returned.</div>
+          )}
+        </div>
       </div>
     </section>
   );
 }
-

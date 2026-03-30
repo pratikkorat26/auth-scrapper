@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Tag
 
-from app.core.config import get_settings
+from ..core.config import get_settings
 
 AUTH_KEYWORDS = ("login", "log in", "sign in", "signin", "auth", "password")
 USERNAME_KEYWORDS = ("user", "username", "email", "login", "identifier")
@@ -144,10 +144,13 @@ def _has_auth_keyword(element: Tag) -> bool:
 
 
 def _build_snippet(element: Tag) -> str:
-    snippet = str(element)
-    snippet = " ".join(snippet.split())
+    snippet = element.prettify(formatter="minimal").strip()
     max_length = get_settings().max_snippet_length
     if len(snippet) <= max_length:
         return snippet
-    return snippet[: max_length - 3] + "..."
 
+    truncated = snippet[: max_length - 3].rstrip()
+    last_newline = truncated.rfind("\n")
+    if last_newline > 0:
+        truncated = truncated[:last_newline].rstrip()
+    return truncated + "\n..."

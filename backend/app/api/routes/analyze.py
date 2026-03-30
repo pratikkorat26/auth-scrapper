@@ -2,9 +2,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.models.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
-from app.services.detector import detect_auth_component
-from app.services.fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
+from ...models.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
+from ...services.detector import detect_auth_component
+from ...services.fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,4 +45,3 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         snippet=result.snippet,
         message=result.message,
     )
-

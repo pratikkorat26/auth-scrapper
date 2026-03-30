@@ -2,7 +2,7 @@ import logging
 
 import httpx
 
-from app.core.config import get_settings
+from ..core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,4 +47,3 @@ async def fetch_html(url: str) -> str:
 
     logger.info("fetch end", extra={"url": url, "status_code": response.status_code})
     return response.text
-

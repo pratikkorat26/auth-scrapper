@@ -48,6 +48,12 @@ uvicorn app.main:app --reload
 
 Backend runs on `http://localhost:8000`.
 
+From the repository root, this also works:
+
+```bash
+uvicorn backend.app.main:app --reload
+```
+
 ### Frontend
 
 ```bash
@@ -93,6 +99,23 @@ cd backend
 pytest
 ```
 
+## Live Validation Report
+
+Run the live-site validation batch from the backend without starting the API server:
+
+```bash
+cd backend
+.venv/bin/python -m app.validation.runner
+```
+
+The report classifies each target as:
+
+- `pass`: authentication markup was detected
+- `miss`: the page fetched successfully, but the detector did not find auth markup
+- `inconclusive`: the site timed out, blocked the request, redirected unexpectedly, or otherwise could not be judged fairly
+
+This validation flow is intentionally local-only and is not part of GitHub Actions because third-party sites can change markup, rate-limit, or block automated requests.
+
 ## Limitations
 
 - Only works on raw server-rendered HTML returned by the target URL.
@@ -114,4 +137,3 @@ GitHub Actions runs:
 
 - backend tests with `pytest`
 - frontend production build with `vite build`
-
