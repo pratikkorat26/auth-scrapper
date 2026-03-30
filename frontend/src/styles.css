@@ -164,8 +164,86 @@ body {
   color: #334155;
 }
 
+.pill-status {
+  text-transform: capitalize;
+}
+
+.pill-found {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pill-partial_auth_surface {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pill-blocked_or_inconclusive {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.pill-not_found {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.summary-chip {
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #334155;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
 .snippet-block {
   margin-top: 8px;
+}
+
+.alternate-panel {
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.86);
+}
+
+.alternate-panel h3 {
+  margin: 0 0 12px;
+}
+
+.alternate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alternate-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alternate-list strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #0f766e;
+}
+
+.alternate-list span {
+  color: #334155;
 }
 
 .snippet-header {

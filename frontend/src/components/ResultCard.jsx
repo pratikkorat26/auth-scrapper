@@ -4,14 +4,23 @@ export default function ResultCard({ result }) {
   }
 
   const snippetLines = result.snippet ? result.snippet.split("\n") : [];
+  const statusLabel = result.status?.replaceAll("_", " ") || (result.found ? "found" : "not found");
 
   return (
     <section className="card">
       <div className="result-header">
         <h2>Analysis Result</h2>
-        <span className={`pill ${result.found ? "pill-success" : "pill-muted"}`}>
-          {result.found ? "Found" : "Not Found"}
+        <span className={`pill pill-status pill-${result.status || (result.found ? "found" : "not_found")}`}>
+          {statusLabel}
         </span>
+      </div>
+
+      <div className="result-summary">
+        <div className="summary-chip">{result.analysis_mode === "browser_fallback" ? "Browser Fallback" : "Static HTML"}</div>
+        <div className="summary-chip">Confidence {result.confidence}</div>
+        {result.fallback_used ? <div className="summary-chip">Fallback Used</div> : null}
+        {result.interaction_used ? <div className="summary-chip">Interaction Reveal</div> : null}
+        {result.surface_type ? <div className="summary-chip">{result.surface_type.replaceAll("_", " ")}</div> : null}
       </div>
 
       <dl className="result-grid">
@@ -20,8 +29,8 @@ export default function ResultCard({ result }) {
           <dd>{result.url}</dd>
         </div>
         <div>
-          <dt>Confidence</dt>
-          <dd>{result.confidence}</dd>
+          <dt>Status</dt>
+          <dd>{statusLabel}</dd>
         </div>
         <div>
           <dt>Signals</dt>
@@ -32,6 +41,22 @@ export default function ResultCard({ result }) {
           <dd>{result.message}</dd>
         </div>
       </dl>
+
+      {result.alternate_candidates?.length ? (
+        <section className="alternate-panel">
+          <h3>Alternate Candidates</h3>
+          <ul className="alternate-list">
+            {result.alternate_candidates.map((candidate, index) => (
+              <li key={`${candidate.surface_type}-${index}`}>
+                <strong>{candidate.surface_type.replaceAll("_", " ")}</strong>
+                <span>
+                  {candidate.status.replaceAll("_", " ")} • confidence {candidate.confidence}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div className="snippet-block">
         <div className="snippet-header">
