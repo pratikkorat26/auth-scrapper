@@ -3,8 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from ...models.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
-from ...services.detector import detect_auth_component
-from ...services.fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
+from ...services.analysis import analyze_url
+from ...services.fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -21,8 +21,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     logger.info("url normalized", extra={"url": payload.url})
 
     try:
-        html = await fetch_html(payload.url)
-        result = detect_auth_component(html)
+        result = await analyze_url(payload.url)
     except InvalidContentTypeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except UpstreamTimeoutError as exc:
@@ -35,13 +34,27 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
 
     logger.info(
         "detection result",
-        extra={"url": payload.url, "found": result.found, "confidence": result.confidence},
+        extra={
+            "url": payload.url,
+            "found": result.detection.found,
+            "confidence": result.detection.confidence,
+            "analysis_mode": result.analysis_mode,
+        },
     )
     return AnalyzeResponse(
         url=payload.url,
-        found=result.found,
-        confidence=result.confidence,
-        signals=result.signals,
-        snippet=result.snippet,
-        message=result.message,
+        found=result.detection.found,
+        confidence=result.detection.confidence,
+        status=result.detection.status,
+        signals=result.detection.signals,
+        snippet=result.detection.snippet,
+        message=result.detection.message,
+        analysis_mode=result.analysis_mode,
+        fallback_used=result.fallback_used,
+        interaction_used=result.interaction_used,
+        surface_type=result.detection.surface_type,
+        fields=[field.__dict__ for field in result.detection.fields],
+        actions=[action.__dict__ for action in result.detection.actions],
+        providers=result.detection.providers,
+        alternate_candidates=[candidate.__dict__ for candidate in result.detection.alternate_candidates],
     )

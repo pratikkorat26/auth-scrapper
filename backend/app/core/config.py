@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 10.0
     max_snippet_length: int = 800
     frontend_origin: str = "http://localhost:5173"
+    enable_browser_fallback: bool = True
+    browser_timeout_seconds: float = 15.0
+    browser_headless: bool = True
+    enable_limited_auth_reveal: bool = True
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[2] / ".env",
