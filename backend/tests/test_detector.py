@@ -19,74 +19,59 @@ def test_detector_finds_login_form() -> None:
     result = detect_auth_component(html)
 
     assert result.found is True
+    assert result.status == "found"
+    assert result.surface_type == "form"
     assert "password_input" in result.signals
-    assert "submit_button" in result.signals
+    assert result.fields
     assert result.snippet is not None
-    assert "\n" in result.snippet
-    assert '<input name="username" type="text"/>' in result.snippet
 
 
-def test_detector_finds_password_only_candidate() -> None:
+def test_detector_marks_sso_surface_as_partial() -> None:
     html = """
-    <div class="auth-panel">
-      <div>
-        <label>Password</label>
-        <input type="password" />
-      </div>
-    </div>
-    """
-
-    result = detect_auth_component(html)
-
-    assert result.found is True
-    assert "password_input" in result.signals
-
-
-def test_detector_returns_not_found_when_no_auth_component_exists() -> None:
-    html = """
-    <html>
-      <body>
-        <section>
-          <h1>Welcome</h1>
-          <p>This page has no login form.</p>
-        </section>
-      </body>
-    </html>
-    """
-
-    result = detect_auth_component(html)
-
-    assert result.found is False
-    assert result.snippet is None
-
-
-def test_detector_preserves_nested_indentation() -> None:
-    html = """
-    <section class="auth-shell">
-      <div class="panel">
-        <form>
-          <div class="field-group">
-            <label>Email</label>
-            <input type="email" name="email" />
-          </div>
-          <div class="field-group">
-            <label>Password</label>
-            <input type="password" name="password" />
-          </div>
-          <button type="submit">Login</button>
-        </form>
-      </div>
+    <section aria-label="Sign in">
+      <button type="button">Continue with Google</button>
+      <button type="button">Continue with Apple</button>
     </section>
     """
 
     result = detect_auth_component(html)
 
-    assert result.snippet is not None
-    assert '<div class="field-group">' in result.snippet
-    assert result.snippet.count("\n") >= 6
+    assert result.found is False
+    assert result.status == "partial_auth_surface"
+    assert result.providers == ["Apple", "Google"]
+    assert result.surface_type == "sso_only"
 
 
-def test_detector_truncation_keeps_multiline_format(monkeypatch) -> None:
+def test_detector_avoids_search_form_false_positive() -> None:
+    html = """
+    <form action="/search" class="search-form">
+      <input type="text" name="q" placeholder="Search products" />
+      <button type="submit">Search</button>
+    </form>
+    """
+
+    result = detect_auth_component(html)
+
+    assert result.found is False
+    assert result.status == "not_found"
+
+
+def test_detector_handles_modal_auth_surface() -> None:
+    html = """
+    <div role="dialog" aria-modal="true" aria-label="Log in">
+      <input type="email" name="email" placeholder="Email" />
+      <button type="button">Continue</button>
+    </div>
+    """
+
+    result = detect_auth_component(html)
+
+    assert result.status == "partial_auth_surface"
+    assert result.surface_type == "dialog"
+    assert any(action.type == "continue" for action in result.actions)
+
+
+def test_detector_returns_full_form_markup_without_truncation(monkeypatch) -> None:
     html = """
     <form id="login-form">
       <div class="field-row">
@@ -109,5 +94,7 @@ def test_detector_truncation_keeps_multiline_format(monkeypatch) -> None:
     result = detect_auth_component(html)
 
     assert result.snippet is not None
-    assert result.snippet.endswith("\n...")
+    assert result.snippet.startswith("<form")
+    assert result.snippet.endswith("</form>")
     assert "\n" in result.snippet
+    assert 'autocomplete="current-password"' in result.snippet
