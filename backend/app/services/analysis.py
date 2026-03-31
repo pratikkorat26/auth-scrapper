@@ -127,7 +127,9 @@ def _should_use_browser_fallback(url: str, html: str, detection: DetectionResult
     auth_intent = " ".join([url.lower(), title_text, meta_description, body_text.lower()])
     has_auth_intent = any(hint in auth_intent for hint in AUTH_INTENT_HINTS)
 
-    if detection.status in {"partial_auth_surface", "found"}:
+    if detection.status == "found":
+        return True
+    if detection.status == "partial_auth_surface" and detection.confidence < 0.75:
         return True
 
     if form_count == 0 and input_count == 0 and button_count == 0:

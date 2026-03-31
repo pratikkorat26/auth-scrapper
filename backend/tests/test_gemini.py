@@ -6,6 +6,7 @@ from app.services.detector import AuthComponent, DetectionResult
 from app.services.gemini import (
     GeminiDecision,
     _extract_response_text,
+    _normalize_component_payload,
     _normalize_gemini_payload,
     _parse_gemini_json,
     ai_fallback_available,
@@ -126,6 +127,68 @@ def test_normalize_gemini_payload_fills_missing_message_and_confidence() -> None
     assert normalized["status"] == "blocked_or_inconclusive"
     assert normalized["message"] == "The page appears blocked or inconclusive."
     assert normalized["confidence"] == 0.5
+
+
+def test_normalize_component_payload_defaults_missing_summary() -> None:
+    result = _normalize_component_payload({"type": "traditional", "confidence": 0.8})
+    assert result["summary"] == "Authentication component"
+
+
+def test_normalize_component_payload_coerces_invalid_type() -> None:
+    result = _normalize_component_payload({"type": "login_form", "confidence": 0.8, "summary": "Login"})
+    assert result["type"] == "unknown_auth_surface"
+
+
+def test_normalize_component_payload_clamps_confidence_over_range() -> None:
+    assert _normalize_component_payload({"type": "traditional", "confidence": 120, "summary": "x"})["confidence"] == 1.0
+    assert _normalize_component_payload({"type": "traditional", "confidence": -5, "summary": "x"})["confidence"] == 0.0
+
+
+def test_normalize_component_payload_handles_non_dict_item() -> None:
+    result = _normalize_component_payload("not a dict")
+    assert result["type"] == "unknown_auth_surface"
+    assert result["summary"] == "Authentication component"
+    assert 0.0 <= result["confidence"] <= 1.0
+
+
+def test_normalize_gemini_payload_normalizes_each_component() -> None:
+    baseline = DetectionResult(
+        found=False, confidence=0.0, signals=[], snippet=None,
+        message="Not found.", status="not_found", components=[],
+    )
+    payload = {
+        "status": "found",
+        "message": "Found",
+        "confidence": 0.9,
+        "components": [
+            {"type": "login_form", "confidence": 999, "summary": ""},
+            {"type": "oauth", "confidence": 0.7},
+            "bad_item",
+        ],
+    }
+    normalized = _normalize_gemini_payload(payload, baseline)
+    assert normalized["components"][0]["type"] == "unknown_auth_surface"
+    assert normalized["components"][0]["confidence"] == 1.0
+    assert normalized["components"][0]["summary"] == "Authentication component"
+    assert normalized["components"][1]["summary"] == "Authentication component"
+    assert normalized["components"][2]["type"] == "unknown_auth_surface"
+
+
+def test_should_not_use_ai_fallback_for_high_confidence_multi_component_browser(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.gemini.get_settings", lambda: SimpleNamespace(ai_low_confidence_threshold=0.65))
+    detection = DetectionResult(
+        found=True,
+        confidence=0.92,
+        signals=["password_input", "oauth_button"],
+        snippet="<form>...</form>",
+        message="Authentication component detected.",
+        status="found",
+        components=[
+            AuthComponent("traditional", "form", 0.92, None, [], [], [], None, "Login form"),
+            AuthComponent("oauth", "sso_only", 0.85, None, [], ["Google"], [], None, "Google SSO"),
+        ],
+    )
+    assert should_use_ai_fallback(detection, browser_used=True) is False
 
 
 def test_extract_response_text_reads_fallback_candidate_parts() -> None:

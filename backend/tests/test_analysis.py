@@ -194,6 +194,32 @@ def test_analyze_url_uses_browser_after_timeout(monkeypatch) -> None:
     assert result.detection.status == "found"
 
 
+def test_high_confidence_partial_skips_browser_fallback() -> None:
+    detection = DetectionResult(
+        found=True,
+        confidence=0.75,
+        signals=["oauth_button"],
+        snippet="<section>...</section>",
+        message="Partial authentication surface detected.",
+        status="partial_auth_surface",
+        components=[],
+    )
+    assert _should_use_browser_fallback("https://example.com/login", "<html><body></body></html>", detection) is False
+
+
+def test_low_confidence_partial_triggers_browser_fallback() -> None:
+    detection = DetectionResult(
+        found=True,
+        confidence=0.74,
+        signals=["oauth_button"],
+        snippet="<section>...</section>",
+        message="Partial authentication surface detected.",
+        status="partial_auth_surface",
+        components=[],
+    )
+    assert _should_use_browser_fallback("https://example.com/login", "<html><body></body></html>", detection) is True
+
+
 def test_analyze_url_returns_blocked_when_fetch_and_browser_fail(monkeypatch) -> None:
     async def fake_fetch_html(_: str) -> str:
         raise FetchError("Upstream returned status 403.")

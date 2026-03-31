@@ -22,6 +22,10 @@ from .detector import (
 logger = logging.getLogger(__name__)
 RAW_PREVIEW_LIMIT = 240
 
+_VALID_COMPONENT_TYPES = frozenset(
+    {"traditional", "oauth", "passwordless", "multi_step", "challenge", "unknown_auth_surface"}
+)
+
 try:
     from google import genai
     from google.genai import types
@@ -82,7 +86,7 @@ def should_use_ai_fallback(detection: DetectionResult, browser_used: bool = Fals
     return (
         detection.status in {"partial_auth_surface", "blocked_or_inconclusive"}
         or (detection.found and detection.confidence < settings.ai_low_confidence_threshold)
-        or (browser_used and len(detection.components) > 1)
+        or (browser_used and len(detection.components) > 1 and detection.confidence < settings.ai_low_confidence_threshold)
     )
 
 
@@ -192,7 +196,7 @@ def _build_prompt(url: str, html: str, heuristic_summary: dict, include_screensh
         "Return every meaningful auth component you can identify.\n"
         "Component types must be one of: traditional, oauth, passwordless, multi_step, challenge, unknown_auth_surface.\n"
         "Components are required when status is found or partial_auth_surface.\n"
-        "Do not return selector hints or HTML snippets.\n"
+        "Each component must include: type, confidence (float 0.0-1.0), and summary (non-empty string).\n"
         "Challenge pages such as CAPTCHA or access denied should use type=challenge.\n\n"
         f"URL:\n{url}\n\n"
         f"{screenshot_line}"
@@ -328,7 +332,7 @@ def _normalize_gemini_payload(payload: dict, baseline: DetectionResult) -> dict:
     components = normalized.get("components")
     if not isinstance(components, list):
         components = []
-    normalized["components"] = components
+    normalized["components"] = [_normalize_component_payload(c) for c in components]
 
     if normalized["status"] in {"found", "partial_auth_surface"} and not normalized["components"]:
         normalized["components"] = [_baseline_component_payload(component) for component in baseline.components]
@@ -357,6 +361,15 @@ def _normalize_confidence(value: object, fallback_confidence: float) -> float:
     except (TypeError, ValueError):
         confidence = fallback_confidence if fallback_confidence > 0 else 0.5
     return max(0.0, min(confidence, 1.0))
+
+
+def _normalize_component_payload(raw: object) -> dict:
+    component = dict(raw) if isinstance(raw, dict) else {}
+    if component.get("type") not in _VALID_COMPONENT_TYPES:
+        component["type"] = "unknown_auth_surface"
+    component["summary"] = str(component.get("summary") or "Authentication component").strip() or "Authentication component"
+    component["confidence"] = _normalize_confidence(component.get("confidence"), 0.5)
+    return component
 
 
 def _default_message_for_status(status: str) -> str:
