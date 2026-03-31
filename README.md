@@ -163,6 +163,7 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 - Backend settings come from `backend/.env`, based on `backend/.env.example`
 - Important runtime settings include browser timeout/headless mode, frontend origin, fallback behavior, and limited auth reveal toggles
 - `VITE_API_BASE_URL` is optional for same-origin deployments such as a single Docker container
+- for single-container Docker builds, do not set `frontend/.env` with `VITE_API_BASE_URL`
 
 ## Limitations
 

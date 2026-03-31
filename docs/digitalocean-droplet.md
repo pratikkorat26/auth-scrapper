@@ -92,9 +92,14 @@ If you later add HTTPS with a reverse proxy, set `FRONTEND_ORIGIN` to the final 
 ## Runtime Notes
 
 - `VITE_API_BASE_URL` is optional in this deployment mode because frontend and backend share the same origin
+- do not create `frontend/.env` with `VITE_API_BASE_URL` for this deployment mode, or the frontend will try to call a separate backend origin
 - the backend API stays available at `/api/v1/analyze`
 - health checks stay available at `/health`
 - Playwright-heavy analysis can still be slower than static HTML analysis
+
+## Local Split-Dev Note
+
+If you want a separate frontend-to-backend setup for local development, use a local-only env file such as `frontend/.env.local` instead of `frontend/.env`. That keeps same-origin Docker builds clean while still letting Vite dev mode point at another backend.
 
 ## Recommended Next Step
 
