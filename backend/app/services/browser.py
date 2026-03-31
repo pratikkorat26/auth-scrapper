@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import base64
+import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .auth_shared import (
+    ACCOUNT_TRIGGER_PATTERN,
+    AUTH_TEXT_RE,
+    AUTH_TRIGGER_PATTERN,
+    BLOCKED_TEXT_RE,
+    CONTINUE_TRIGGER_PATTERN,
+)
 from ..core.config import get_settings
-from .detector import AuthComponent
 from .fetcher import FetchError, UpstreamTimeoutError
 
 logger = logging.getLogger(__name__)
@@ -33,19 +38,7 @@ class BrowserRenderResult:
     html: str
     interaction_used: bool
     typing_used: bool
-    screenshot_base64: Optional[str] = None
     snapshots: list[BrowserMarkupSnapshot] = field(default_factory=list)
-
-
-AUTH_TRIGGER_PATTERN = re.compile(
-    r"(log in|login|sign in|sign-in|join|get started|continue with email|use email|continue as|sign in with|continue with)",
-    re.IGNORECASE,
-)
-ACCOUNT_TRIGGER_PATTERN = re.compile(
-    r"(my account|account|profile|avatar|user menu|menu|open account|open profile)",
-    re.IGNORECASE,
-)
-CONTINUE_TRIGGER_PATTERN = re.compile(r"(continue|next|log in|login|sign in|sign-in)", re.IGNORECASE)
 
 
 async def render_html(url: str) -> BrowserRenderResult:
@@ -73,7 +66,6 @@ async def render_html(url: str) -> BrowserRenderResult:
                             typing_used=typing_used,
                         )
                     )
-                screenshot_base64 = await _capture_screenshot(page) if settings.enable_ai_screenshot_context else None
             finally:
                 await page.close()
                 await browser.close()
@@ -89,46 +81,8 @@ async def render_html(url: str) -> BrowserRenderResult:
         html=html,
         interaction_used=interaction_used,
         typing_used=typing_used,
-        screenshot_base64=screenshot_base64,
         snapshots=snapshots,
     )
-
-
-async def enrich_components_with_browser(url: str, components: list[AuthComponent]) -> list[AuthComponent]:
-    if async_playwright is None or not components:
-        return components
-
-    settings = get_settings()
-    timeout_ms = int(settings.browser_timeout_seconds * 1000)
-
-    try:
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=settings.browser_headless)
-            page = await browser.new_page()
-            try:
-                await _prepare_page(page, url, timeout_ms, [])
-                enriched = []
-                for component in components:
-                    snippet = await _extract_component_html(page, component)
-                    enriched.append(
-                        AuthComponent(
-                            type=component.type,
-                            surface_type=component.surface_type,
-                            confidence=component.confidence,
-                            selector_hint=component.selector_hint,
-                            signals=component.signals,
-                            providers=component.providers,
-                            fields=component.fields,
-                            snippet=snippet or component.snippet,
-                            summary=component.summary,
-                        )
-                    )
-                return enriched
-            finally:
-                await page.close()
-                await browser.close()
-    except Exception:
-        return components
 
 
 async def _prepare_page(page, url: str, timeout_ms: int, snapshots: list[BrowserMarkupSnapshot]) -> tuple[bool, bool]:
@@ -153,83 +107,17 @@ async def _prepare_page(page, url: str, timeout_ms: int, snapshots: list[Browser
     return interaction_used, typing_used
 
 
-async def _capture_screenshot(page) -> Optional[str]:
-    try:
-        image_bytes = await page.screenshot(type="jpeg", quality=60, full_page=False)
-        return base64.b64encode(image_bytes).decode("ascii")
-    except Exception:
-        return None
-
-
-async def _extract_component_html(page, component: AuthComponent) -> Optional[str]:
-    selectors: list[str] = []
-    if component.selector_hint:
-        selectors.append(component.selector_hint)
-
-    if component.type == "traditional":
-        selectors.extend(
-            [
-                "form:has(input[type='password'])",
-                "[role='dialog']:has(input[type='password'])",
-                "dialog:has(input[type='password'])",
-            ]
-        )
-    elif component.type == "oauth":
-        for provider in component.providers:
-            selectors.extend(
-                [
-                    f"button:has-text('Continue with {provider}')",
-                    f"button:has-text('Sign in with {provider}')",
-                    f"a:has-text('Continue with {provider}')",
-                    f"[data-provider='{provider.lower()}']",
-                ]
-            )
-    elif component.type == "passwordless":
-        selectors.extend(
-            [
-                "button:has-text('Passkey')",
-                "button:has-text('Magic link')",
-                "input[inputmode='numeric']",
-            ]
-        )
-    elif component.type == "multi_step":
-        selectors.extend(
-            [
-                "form:has(input[type='email'])",
-                "[role='dialog']:has(input[type='email'])",
-                "dialog:has(input[type='email'])",
-                "section:has(input[type='email'])",
-            ]
-        )
-
-    for selector in selectors:
-        html = await _try_selector(page, selector)
-        if html:
-            return _truncate(html)
-    return None
-
-
-async def _try_selector(page, selector: str) -> Optional[str]:
-    try:
-        loc = page.locator(selector).first
-        await loc.wait_for(state="visible", timeout=2000)
-        if await loc.count() == 0:
-            return None
-        return await loc.evaluate("(el) => el.outerHTML")
-    except Exception:
-        return None
-
-
 async def _wait_for_auth_markup(page, timeout_ms: int) -> None:
+    blocked_pattern = json.dumps(BLOCKED_TEXT_RE.pattern)
+    auth_pattern = json.dumps(AUTH_TEXT_RE.pattern)
     try:
         await page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except PlaywrightTimeoutError:
         pass
 
-    await page.wait_for_function(
-        """
+    script = """
         () => {
-          const blockedText = /blocked by network security|access denied|captcha|unusual activity|verify you are human|request blocked/i;
+          const blockedText = new RegExp(__BLOCKED_PATTERN__, "i");
           const bodyText = document.body?.innerText || "";
           const authSelectors = [
             "form",
@@ -239,22 +127,22 @@ async def _wait_for_auth_markup(page, timeout_ms: int) -> None:
             "[role='dialog']",
             "dialog"
           ];
-          const authText = /log in|login|sign in|signin|continue with email|continue with google|passkey|magic link|verification code/i;
+          const authText = new RegExp(__AUTH_PATTERN__, "i");
           const authNode = Array.from(document.querySelectorAll("button, a, div, section, dialog, nav, header, input, textarea"))
             .find((node) => authText.test((node.innerText || "") + " " + (node.getAttribute("aria-label") || "") + " " + (node.getAttribute("title") || "")));
           return blockedText.test(bodyText) || authSelectors.some((selector) => document.querySelector(selector)) || Boolean(authNode);
         }
-        """,
-        timeout=timeout_ms,
-    )
+        """
+    script = script.replace("__BLOCKED_PATTERN__", blocked_pattern).replace("__AUTH_PATTERN__", auth_pattern)
+    await page.wait_for_function(script, timeout=timeout_ms)
 
 
 async def _page_auth_checkpoint(page) -> Optional[str]:
-    return await page.evaluate(
-        """
+    blocked_pattern = json.dumps(BLOCKED_TEXT_RE.pattern)
+    script = """
         () => {
           const bodyText = (document.body?.innerText || "");
-          if (/blocked by network security|access denied|captcha|unusual activity|verify you are human|request blocked/i.test(bodyText)) {
+          if (new RegExp(__BLOCKED_PATTERN__, "i").test(bodyText)) {
             return "challenge";
           }
           if (document.querySelector("input[type='password']")) {
@@ -282,7 +170,8 @@ async def _page_auth_checkpoint(page) -> Optional[str]:
           return null;
         }
         """
-    )
+    script = script.replace("__BLOCKED_PATTERN__", blocked_pattern)
+    return await page.evaluate(script)
 
 
 async def _attempt_auth_reveal(page, timeout_ms: int, snapshots: list[BrowserMarkupSnapshot]) -> tuple[bool, bool]:
@@ -450,8 +339,3 @@ async def _record_snapshot(
             typing_used=typing_used,
         )
     )
-
-
-def _truncate(html: str) -> str:
-    max_length = get_settings().max_snippet_length
-    return html if len(html) <= max_length else html[:max_length].rstrip() + "..."
