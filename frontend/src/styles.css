@@ -93,6 +93,33 @@ h4,
   gap: 20px;
 }
 
+.app-signature {
+  position: relative;
+  z-index: 1;
+  margin-top: 28px;
+  padding: 6px 2px 0;
+  text-align: center;
+  color: #95a6bc;
+}
+
+.app-signature p,
+.app-signature span {
+  margin: 0;
+}
+
+.app-signature p {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #d9e4f5;
+}
+
+.app-signature span {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.88rem;
+  color: #9fb1c8;
+}
+
 .card {
   background: rgba(13, 22, 36, 0.86);
   border: 1px solid rgba(148, 163, 184, 0.14);

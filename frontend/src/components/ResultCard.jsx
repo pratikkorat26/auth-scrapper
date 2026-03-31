@@ -46,6 +46,8 @@ const MODE_COPY = {
   browser_fallback: "Rendered browser pass",
 };
 
+const BLOCKED_MESSAGE_RE = /block automated access|block.*scrap|protected page|verify you are human|request blocked|access denied|captcha/i;
+
 function toDisplayLabel(value) {
   return value
     ?.replaceAll("_", " ")
@@ -81,6 +83,7 @@ export default function ResultCard({ result }) {
   const statusLabel = STATUS_COPY[normalizedStatus] || toDisplayLabel(normalizedStatus) || "Analysis result";
   const modeLabel = MODE_COPY[result.analysis_mode] || toDisplayLabel(result.analysis_mode) || "Standard pass";
   const summary = buildSummary(result, statusLabel, modeLabel);
+  const isProtectedPage = normalizedStatus === "blocked_or_inconclusive" && BLOCKED_MESSAGE_RE.test(result.message || "");
   const metadata = [
     { label: "Mode", value: modeLabel },
     { label: "Confidence", value: result.confidence ?? "N/A" },
@@ -101,7 +104,7 @@ export default function ResultCard({ result }) {
           <h2>{statusLabel}</h2>
         </div>
         <span className={`pill pill-status pill-${normalizedStatus}`}>
-          {statusLabel}
+          {isProtectedPage ? "Protected page" : statusLabel}
         </span>
       </div>
 

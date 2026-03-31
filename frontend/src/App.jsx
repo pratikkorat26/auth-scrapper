@@ -7,9 +7,10 @@ import UrlForm from "./components/UrlForm";
 import "./styles.css";
 
 const ANALYSIS_STAGES = [
-  { label: "Source scan", detail: "Reads the page structure first." },
-  { label: "Rendered check", detail: "Falls back to browser rendering when needed." },
-  { label: "Editorial summary", detail: "Returns the clearest auth snippet it can verify." },
+  { label: "Rendered capture", detail: "Loads the page in a browser and records a few DOM snapshots of the visible auth state." },
+  { label: "Rule-based detection", detail: "Scores each snapshot for visible login, OAuth, multi-step, and passwordless auth signals." },
+  { label: "Best snippet selection", detail: "Keeps the strongest visible auth markup and preserves distinct secondary auth components when they exist." },
+  { label: "Optional AI audit", detail: "Uses Gemini only as a non-authoritative audit for ambiguous cases without replacing the detector result." },
 ];
 
 export default function App() {
@@ -81,8 +82,8 @@ export default function App() {
             <div className="state-kicker">Analysis in progress</div>
             <h2>Checking the page and looking for the strongest auth evidence.</h2>
             <p>
-              The app is scanning the initial markup, then escalating to a rendered pass if the page needs a
-              little more context.
+              The app is rendering the page, comparing a few visible auth states, and selecting the strongest
+              auth snippet it can verify.
             </p>
             <div className="loading-meter" aria-hidden="true">
               <span />
@@ -104,6 +105,11 @@ export default function App() {
         <ResultCard result={result} />
       </section>
 
+      <footer className="app-signature" aria-label="Built by signature">
+        <p>Built by Pratik Korat</p>
+        <span>Made with love ❤️</span>
+      </footer>
+
       {isModalOpen ? (
         <div
           className="modal-overlay"
@@ -118,7 +124,7 @@ export default function App() {
             <div className="modal-header">
               <div>
                 <p className="modal-kicker">How auth extraction works</p>
-                <h2 id="auth-extraction-title">Three quick stages</h2>
+                <h2 id="auth-extraction-title">Current evaluation flow</h2>
               </div>
               <button
                 className="modal-close"
