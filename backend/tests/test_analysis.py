@@ -208,6 +208,47 @@ def test_analyze_url_returns_blocked_when_browser_and_static_fail(monkeypatch) -
     assert result.analysis_mode == "browser_primary"
     assert result.fallback_used is True
     assert result.detection.status == "blocked_or_inconclusive"
+    assert "block automated access" in result.detection.message.lower()
+
+
+def test_analyze_url_uses_protected_page_message_for_challenge_detection(monkeypatch) -> None:
+    challenge_html = """
+    <html><body><section><h2>Verify you are human</h2><div>Request blocked</div></section></body></html>
+    """
+
+    async def fake_render_html(_: str):
+        from app.services.browser import BrowserRenderResult
+
+        return BrowserRenderResult(
+            html=challenge_html,
+            interaction_used=False,
+            typing_used=False,
+            screenshot_base64=None,
+            snapshots=[BrowserMarkupSnapshot("settled_dom", challenge_html, False, False)],
+        )
+
+    monkeypatch.setattr("app.services.analysis.render_html", fake_render_html)
+
+    result = asyncio.run(analyze_url("https://example.com/login"))
+
+    assert result.detection.status == "blocked_or_inconclusive"
+    assert "block automated access" in result.detection.message.lower()
+
+
+def test_analyze_url_keeps_generic_message_for_non_blocked_inconclusive(monkeypatch) -> None:
+    async def fake_render_html(_: str):
+        raise FetchError("Browser fallback failed.")
+
+    async def fake_fetch_html(_: str) -> str:
+        raise FetchError("Failed to fetch URL.")
+
+    monkeypatch.setattr("app.services.analysis.render_html", fake_render_html)
+    monkeypatch.setattr("app.services.analysis.fetch_html", fake_fetch_html)
+
+    result = asyncio.run(analyze_url("https://example.com/login"))
+
+    assert result.detection.status == "blocked_or_inconclusive"
+    assert result.detection.message == "Failed to fetch URL."
 
 
 def test_analyze_url_uses_gemini_as_audit_only(monkeypatch) -> None:

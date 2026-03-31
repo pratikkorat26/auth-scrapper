@@ -9,10 +9,11 @@ from bs4 import BeautifulSoup
 
 from .browser import BrowserMarkupSnapshot, render_html
 from .detector import DetectionResult, choose_primary_component, detect_auth_component
-from .fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
+from .fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html, is_forbidden_fetch_error
 from .gemini import ai_fallback_available, audit_detection_with_ai, should_use_ai_fallback
 
 logger = logging.getLogger(__name__)
+BLOCKED_MESSAGE = "This site appears to block automated access or scraping, so auth extraction is limited."
 
 STATUS_PRIORITY = {
     "found": 3,
@@ -74,12 +75,13 @@ async def analyze_url(url: str) -> AnalysisResult:
         except InvalidContentTypeError:
             raise
         except (FetchError, UpstreamTimeoutError) as fetch_exc:
+            blocked_message = BLOCKED_MESSAGE if is_forbidden_fetch_error(fetch_exc) else str(fetch_exc)
             detection = DetectionResult(
                 found=False,
                 confidence=0.0,
                 signals=[],
                 snippet=None,
-                message=str(fetch_exc),
+                message=blocked_message,
                 status="blocked_or_inconclusive",
                 components=[],
             )
@@ -101,16 +103,22 @@ async def analyze_url(url: str) -> AnalysisResult:
             ai_refined = audit.disagreed
             ai_provider = audit.provider
             ai_model = audit.model
-            logger.info(
-                "gemini audit evaluated",
-                extra={
-                    "url": url,
-                    "path": "gemini_audit_ignored",
-                    "disagreed": audit.disagreed,
-                    "audit_status": audit.status,
-                    "audit_confidence": audit.ai_confidence,
-                },
-            )
+            if detection.status == "blocked_or_inconclusive" and detection.message == BLOCKED_MESSAGE:
+                audit = None
+                ai_refined = False
+                ai_provider = None
+                ai_model = None
+            else:
+                logger.info(
+                    "gemini audit evaluated",
+                    extra={
+                        "url": url,
+                        "path": "gemini_audit_ignored",
+                        "disagreed": audit.disagreed,
+                        "audit_status": audit.status,
+                        "audit_confidence": audit.ai_confidence,
+                    },
+                )
 
     return AnalysisResult(
         detection=detection,
@@ -194,7 +202,7 @@ def _merge_detection_components(primary_detection: DetectionResult, detections: 
         confidence=primary_detection.confidence,
         signals=primary_detection.signals,
         snippet=primary_detection.snippet,
-        message=primary_detection.message,
+        message=_final_detection_message(primary_detection),
         status=primary_detection.status,
         surface_type=primary_detection.surface_type,
         fields=primary_detection.fields,
@@ -203,6 +211,15 @@ def _merge_detection_components(primary_detection: DetectionResult, detections: 
         components=merged_components,
         partial_html_markup=primary_detection.partial_html_markup,
     )
+
+
+def _final_detection_message(detection: DetectionResult) -> str:
+    if detection.status == "blocked_or_inconclusive" and (
+        "challenge" in " ".join(detection.signals).lower()
+        or is_blocked_or_challenged_html(detection.snippet or detection.partial_html_markup or "")
+    ):
+        return BLOCKED_MESSAGE
+    return detection.message
 
 
 def _component_key(component) -> tuple[str, tuple[str, ...], Optional[str]]:

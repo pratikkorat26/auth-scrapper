@@ -19,6 +19,10 @@ class UpstreamTimeoutError(FetchError):
     pass
 
 
+def is_forbidden_fetch_error(exc: Exception) -> bool:
+    return "status 403" in str(exc).lower() or "forbidden" in str(exc).lower()
+
+
 async def fetch_html(url: str) -> str:
     settings = get_settings()
     logger.info("fetch start", extra={"url": url})
@@ -35,6 +39,8 @@ async def fetch_html(url: str) -> str:
         raise UpstreamTimeoutError("Request timed out.") from exc
     except httpx.HTTPStatusError as exc:
         logger.error("fetch failure", extra={"url": url, "status_code": exc.response.status_code})
+        if exc.response.status_code == 403:
+            raise FetchError("This site appears to block automated access or scraping, so auth extraction is limited.") from exc
         raise FetchError(f"Upstream returned status {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
         logger.error("fetch failure", extra={"url": url})

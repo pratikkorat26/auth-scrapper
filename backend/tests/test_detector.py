@@ -22,6 +22,8 @@ def test_detector_finds_login_form_component() -> None:
     assert result.components[0].type == "traditional"
     assert result.snippet is not None
     assert result.snippet.startswith("<form")
+    assert 'type="email"' in result.snippet
+    assert 'type="password"' in result.snippet
 
 
 def test_detector_marks_sso_surface_as_oauth_component() -> None:
@@ -216,6 +218,55 @@ def test_detector_prefers_form_over_broad_wrapper() -> None:
     assert result.status == "found"
     assert result.snippet is not None
     assert result.snippet.startswith("<form")
+
+
+def test_detector_prefers_container_with_identity_and_password_over_password_only_child() -> None:
+    html = """
+    <section class="auth-card">
+      <div class="credential-step">
+        <input type="email" name="email" />
+        <div class="password-row">
+          <input type="password" name="password" />
+        </div>
+        <button type="submit">Sign in</button>
+      </div>
+    </section>
+    """
+
+    result = detect_auth_component(html)
+
+    assert result.status == "found"
+    assert result.snippet is not None
+    assert 'type="email"' in result.snippet
+    assert 'type="password"' in result.snippet
+    assert "Sign in" in result.snippet
+
+
+def test_detector_prefers_smallest_shared_container_for_split_credentials() -> None:
+    html = """
+    <main class="page-shell">
+      <section class="marketing-copy">Welcome back</section>
+      <section class="auth-card">
+        <div class="identity-column">
+          <input type="text" name="username" />
+        </div>
+        <div class="credential-panel">
+          <div class="password-slot">
+            <input type="password" name="password" />
+          </div>
+          <button type="submit">Log in</button>
+        </div>
+      </section>
+    </main>
+    """
+
+    result = detect_auth_component(html)
+
+    assert result.status == "found"
+    assert result.snippet is not None
+    assert 'name="username"' in result.snippet
+    assert 'type="password"' in result.snippet
+    assert "page-shell" not in result.snippet
 
 
 def test_detector_handles_composite_github_style_auth_page() -> None:

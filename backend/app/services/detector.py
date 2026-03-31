@@ -367,7 +367,12 @@ def _candidate_rejection_reason(element: Tag, signals: _CandidateSignals) -> Opt
         return "hard_rejected_hidden"
     if _is_noise_container(element):
         return "hard_rejected_non_auth"
-    if element.name not in {"form", "dialog"} and element.get("role") != "dialog" and _has_auth_bearing_descendant(element):
+    if (
+        element.name not in {"form", "dialog"}
+        and element.get("role") != "dialog"
+        and _has_auth_bearing_descendant(element)
+        and not _is_smallest_credential_complete_container(element)
+    ):
         return "hard_rejected_non_auth"
     if signals.meaningful_field_types == {"otp"} and not signals.has_passwordless:
         return "hard_rejected_non_auth"
@@ -377,6 +382,8 @@ def _candidate_rejection_reason(element: Tag, signals: _CandidateSignals) -> Opt
         return "hard_rejected_non_auth"
     if element.name == "form" and not strong_controls and not signals.has_auth_text and not signals.has_challenge:
         return "hard_rejected_non_auth"
+    if signals.has_password and signals.has_identity and (signals.has_submit or signals.has_continue):
+        return None
     if element.name != "form" and not strong_controls and not signals.has_auth_text and not signals.has_passwordless and not signals.has_challenge:
         return "hard_rejected_non_auth"
     return None
@@ -691,6 +698,7 @@ def _candidate_size(element: Tag) -> int:
 def _candidate_focus_score(element: Tag) -> int:
     score = 0
     text_blob = _element_text_blob(element)
+    signals = _collect_signals(element)
     nested_forms = len(element.find_all("form"))
     visible_actions = len(_extract_actions(element))
     visible_fields = len(_extract_fields(element))
@@ -703,10 +711,14 @@ def _candidate_focus_score(element: Tag) -> int:
     )
     if element.name == "form":
         score += 4
-    if element.find("input", attrs={"type": "password"}):
+    if signals.has_password and signals.has_identity:
+        score += 9
+    elif signals.has_password:
         score += 5
-    if element.find("input", attrs={"type": "email"}):
+    elif signals.has_identity:
         score += 3
+    if signals.has_password and signals.has_identity and (signals.has_submit or signals.has_continue):
+        score += 4
     if visible_fields:
         score += min(visible_fields, 3)
     if visible_actions:
@@ -740,6 +752,10 @@ def _build_snippet(element: Tag) -> str:
 
 
 def _select_snippet_element(element: Tag) -> Tag:
+    element_signals = _collect_signals(element)
+    if element_signals.has_password and element_signals.has_identity:
+        return element
+
     descendants = [
         node
         for node in element.find_all(["form", "section", "div", "dialog", "aside", "main", "article"], recursive=True)
@@ -747,7 +763,7 @@ def _select_snippet_element(element: Tag) -> Tag:
     ]
     if not descendants:
         return element
-    selected = sorted(descendants, key=lambda node: (-_candidate_focus_score(node), _candidate_size(node)))[0]
+    selected = sorted(descendants, key=lambda node: _snippet_selection_key(node))[0]
     logger.info(
         "snippet focus selected",
         extra={
@@ -761,6 +777,8 @@ def _select_snippet_element(element: Tag) -> Tag:
 
 def _is_auth_bearing_node(element: Tag) -> bool:
     signals = _collect_signals(element)
+    if signals.has_password and signals.has_identity and (signals.has_submit or signals.has_continue or signals.has_auth_text):
+        return True
     if signals.has_password and (signals.has_identity or signals.has_submit or signals.has_auth_text):
         return True
     if signals.providers and any(action.type == "provider" for action in signals.actions):
@@ -770,6 +788,18 @@ def _is_auth_bearing_node(element: Tag) -> bool:
     if signals.has_identity and (signals.has_continue or signals.has_password_followup):
         return True
     return False
+
+
+def _snippet_selection_key(element: Tag) -> tuple[int, int, int]:
+    signals = _collect_signals(element)
+    credential_complete = 1 if signals.has_password and signals.has_identity else 0
+    credential_action_complete = 1 if credential_complete and (signals.has_submit or signals.has_continue) else 0
+    return (
+        -credential_action_complete,
+        -credential_complete,
+        -_candidate_focus_score(element),
+        _candidate_size(element),
+    )
 
 
 def _serialize_partial_markup(element: Tag) -> str:
@@ -894,3 +924,18 @@ def _has_auth_bearing_descendant(element: Tag) -> bool:
         if _is_auth_bearing_node(node):
             return True
     return False
+
+
+def _is_smallest_credential_complete_container(element: Tag) -> bool:
+    signals = _collect_signals(element)
+    if not (signals.has_password and signals.has_identity and (signals.has_submit or signals.has_continue or signals.has_auth_text)):
+        return False
+    for child in element.find_all(["form", "section", "div", "dialog", "aside", "main", "article"], recursive=False):
+        if _is_hidden_element(child) or _is_noise_container(child):
+            continue
+        child_signals = _collect_signals(child)
+        if child_signals.has_password and child_signals.has_identity and (
+            child_signals.has_submit or child_signals.has_continue or child_signals.has_auth_text
+        ):
+            return False
+    return True
