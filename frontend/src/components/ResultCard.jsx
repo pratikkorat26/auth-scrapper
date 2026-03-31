@@ -1,16 +1,16 @@
-function SnippetViewer({ title, snippet, compact = false, variant = "" }) {
+function SnippetViewer({ title, snippet, variant = "" }) {
   const lines = snippet ? snippet.split("\n") : [];
   const languageLabel = variant === "partial" ? "Partial HTML markup" : "Primary HTML evidence";
 
   return (
-    <div className={`snippet-block${compact ? " snippet-block-compact" : ""}${variant ? ` snippet-block-${variant}` : ""}`}>
+    <div className={`snippet-block${variant ? ` snippet-block-${variant}` : ""}`}>
       <div className="snippet-header">
-        {compact ? <h4>{title}</h4> : <h3>{title}</h3>}
+        <h3>{title}</h3>
         <span className="snippet-language">{languageLabel}</span>
       </div>
-      <div className={`snippet-viewer${compact ? " snippet-viewer-compact" : ""}`} aria-label={`${title} viewer`}>
+      <div className="snippet-viewer" aria-label={`${title} viewer`}>
         {lines.length ? (
-          <pre className={`snippet-code${compact ? " snippet-code-compact" : ""}`}>
+          <pre className="snippet-code">
             <code>
               {lines.map((line, index) => (
                 <span className="snippet-line" key={`${title}-${index}-${line}`}>
@@ -32,21 +32,6 @@ function SnippetViewer({ title, snippet, compact = false, variant = "" }) {
     </div>
   );
 }
-
-const STATUS_COPY = {
-  found: "Auth surface found",
-  partial_auth_surface: "Partial auth surface found",
-  blocked_or_inconclusive: "Analysis was limited",
-  not_found: "No auth surface found",
-};
-
-const MODE_COPY = {
-  static_html: "Static HTML",
-  browser_primary: "Rendered browser pass",
-  browser_fallback: "Rendered browser pass",
-};
-
-const BLOCKED_MESSAGE_RE = /block automated access|block.*scrap|protected page|verify you are human|request blocked|access denied|captcha/i;
 
 function toDisplayLabel(value) {
   return value
@@ -80,21 +65,15 @@ export default function ResultCard({ result }) {
   }
 
   const normalizedStatus = result.status || (result.found ? "found" : "not_found");
-  const statusLabel = STATUS_COPY[normalizedStatus] || toDisplayLabel(normalizedStatus) || "Analysis result";
-  const modeLabel = MODE_COPY[result.analysis_mode] || toDisplayLabel(result.analysis_mode) || "Standard pass";
+  const statusLabel = result.status_label || toDisplayLabel(normalizedStatus) || "Analysis result";
+  const modeLabel = result.analysis_mode_label || toDisplayLabel(result.analysis_mode) || "Standard pass";
   const summary = buildSummary(result, statusLabel, modeLabel);
-  const isProtectedPage = normalizedStatus === "blocked_or_inconclusive" && BLOCKED_MESSAGE_RE.test(result.message || "");
   const metadata = [
     { label: "Mode", value: modeLabel },
     { label: "Confidence", value: result.confidence ?? "N/A" },
     { label: "Fallback", value: result.fallback_used ? "Used" : "Not needed" },
     { label: "Interaction", value: result.interaction_used ? "Triggered" : "Not used" },
-    { label: "AI review", value: result.ai_used ? (result.ai_refined ? "Gemini refined" : "Gemini assisted") : "Not used" },
   ];
-
-  if (result.ai_provider) {
-    metadata.push({ label: "Provider", value: result.ai_provider });
-  }
 
   return (
     <section className="card result-card">
@@ -104,7 +83,7 @@ export default function ResultCard({ result }) {
           <h2>{statusLabel}</h2>
         </div>
         <span className={`pill pill-status pill-${normalizedStatus}`}>
-          {isProtectedPage ? "Protected page" : statusLabel}
+          {result.protected_page ? "Protected page" : statusLabel}
         </span>
       </div>
 

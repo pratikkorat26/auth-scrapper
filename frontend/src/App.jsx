@@ -1,17 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { analyzeUrl } from "./api/client";
+import AnalysisFlowModal from "./components/AnalysisFlowModal";
 import ResultCard from "./components/ResultCard";
 import StatusBanner from "./components/StatusBanner";
 import UrlForm from "./components/UrlForm";
 import "./styles.css";
-
-const ANALYSIS_STAGES = [
-  { label: "Rendered capture", detail: "Loads the page in a browser and records a few DOM snapshots of the visible auth state." },
-  { label: "Rule-based detection", detail: "Scores each snapshot for visible login, OAuth, multi-step, and passwordless auth signals." },
-  { label: "Best snippet selection", detail: "Keeps the strongest visible auth markup and preserves distinct secondary auth components when they exist." },
-  { label: "Optional AI audit", detail: "Uses Gemini only as a non-authoritative audit for ambiguous cases without replacing the detector result." },
-];
 
 export default function App() {
   const [url, setUrl] = useState("");
@@ -109,44 +103,7 @@ export default function App() {
         <p>Built by Pratik Korat</p>
         <span>Made with love ❤️</span>
       </footer>
-
-      {isModalOpen ? (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setIsModalOpen(false);
-            }
-          }}
-        >
-          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-extraction-title">
-            <div className="modal-header">
-              <div>
-                <p className="modal-kicker">How auth extraction works</p>
-                <h2 id="auth-extraction-title">Current evaluation flow</h2>
-              </div>
-              <button
-                className="modal-close"
-                type="button"
-                aria-label="Close dialog"
-                onClick={() => setIsModalOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="modal-stage-list">
-              {ANALYSIS_STAGES.map((stage) => (
-                <article className="modal-stage" key={stage.label}>
-                  <span className="modal-stage-title">{stage.label}</span>
-                  <p>{stage.detail}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <AnalysisFlowModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
     </main>
   );
 }
