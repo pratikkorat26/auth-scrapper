@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,6 +17,18 @@ class AnalyzeRequest(BaseModel):
         return normalized
 
 
+class AuthComponentResponse(BaseModel):
+    type: Literal["traditional", "oauth", "passwordless", "multi_step", "challenge", "unknown_auth_surface"]
+    surface_type: Optional[str] = None
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    selector_hint: Optional[str] = None
+    signals: list[str] = Field(default_factory=list)
+    providers: list[str] = Field(default_factory=list)
+    fields: list[dict] = Field(default_factory=list)
+    snippet: Optional[str] = None
+    summary: str
+
+
 class AnalyzeResponse(BaseModel):
     url: str
     found: bool
@@ -28,11 +40,11 @@ class AnalyzeResponse(BaseModel):
     analysis_mode: str
     fallback_used: bool
     interaction_used: bool
-    surface_type: Optional[str] = None
-    fields: list[dict] = Field(default_factory=list)
-    actions: list[dict] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=list)
-    alternate_candidates: list[dict] = Field(default_factory=list)
+    ai_used: bool
+    ai_refined: bool
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
+    components: list[AuthComponentResponse] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
