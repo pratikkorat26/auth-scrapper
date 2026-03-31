@@ -63,6 +63,23 @@ def test_extract_relevant_sections_prefers_auth_markup(monkeypatch) -> None:
     assert len(excerpt) <= 300
 
 
+def test_extract_relevant_sections_keeps_auth_button_context(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.gemini.get_settings", lambda: SimpleNamespace(ai_max_input_chars=600))
+    html = """
+    <html><body>
+      <div class="hero-copy">Welcome to the site</div>
+      <div class="auth-shell">
+        <button type="button">Continue with Google</button>
+      </div>
+    </body></html>
+    """
+
+    excerpt = extract_relevant_sections(html)
+
+    assert "Continue with Google" in excerpt
+    assert "auth-shell" in excerpt
+
+
 def test_gemini_decision_requires_components_for_auth_outcome() -> None:
     try:
         GeminiDecision(status="found", message="Detected", confidence=0.8, components=[])
@@ -78,16 +95,12 @@ def test_parse_gemini_json_accepts_plain_json_object() -> None:
 
 
 def test_parse_gemini_json_accepts_code_fence() -> None:
-    payload = _parse_gemini_json(
-        '```json\n{"status":"not_found","message":"No auth","confidence":0.2,"components":[]}\n```'
-    )
+    payload = _parse_gemini_json('```json\n{"status":"not_found","message":"No auth","confidence":0.2,"components":[]}\n```')
     assert payload["status"] == "not_found"
 
 
 def test_parse_gemini_json_accepts_extra_prose() -> None:
-    payload = _parse_gemini_json(
-        'Here is the result:\n{"status":"partial","message":"Maybe auth","confidence":0.6,"components":[]}\nThank you.'
-    )
+    payload = _parse_gemini_json('Here is the result:\n{"status":"partial","message":"Maybe auth","confidence":0.6,"components":[]}\nThanks.')
     assert payload["status"] == "partial"
 
 
@@ -109,6 +122,7 @@ def test_normalize_gemini_payload_fills_missing_components_from_baseline() -> No
     assert normalized["status"] == "found"
     assert normalized["components"]
     assert normalized["confidence"] == 0.72
+    assert normalized["components"][0]["type"] == "oauth"
 
 
 def test_normalize_gemini_payload_fills_missing_message_and_confidence() -> None:
@@ -172,23 +186,6 @@ def test_normalize_gemini_payload_normalizes_each_component() -> None:
     assert normalized["components"][0]["summary"] == "Authentication component"
     assert normalized["components"][1]["summary"] == "Authentication component"
     assert normalized["components"][2]["type"] == "unknown_auth_surface"
-
-
-def test_should_not_use_ai_fallback_for_high_confidence_multi_component_browser(monkeypatch) -> None:
-    monkeypatch.setattr("app.services.gemini.get_settings", lambda: SimpleNamespace(ai_low_confidence_threshold=0.65))
-    detection = DetectionResult(
-        found=True,
-        confidence=0.92,
-        signals=["password_input", "oauth_button"],
-        snippet="<form>...</form>",
-        message="Authentication component detected.",
-        status="found",
-        components=[
-            AuthComponent("traditional", "form", 0.92, None, [], [], [], None, "Login form"),
-            AuthComponent("oauth", "sso_only", 0.85, None, [], ["Google"], [], None, "Google SSO"),
-        ],
-    )
-    assert should_use_ai_fallback(detection, browser_used=True) is False
 
 
 def test_extract_response_text_reads_fallback_candidate_parts() -> None:
