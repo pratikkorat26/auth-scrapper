@@ -334,6 +334,12 @@ h4,
   color: #fecaca;
 }
 
+.banner-info {
+  background: rgba(34, 75, 123, 0.2);
+  border-color: rgba(125, 211, 252, 0.28);
+  color: #d7f0ff;
+}
+
 .state-kicker {
   margin: 0 0 10px;
   font-size: 0.92rem;
