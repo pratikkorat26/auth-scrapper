@@ -43,7 +43,7 @@ The app accepts a URL, fetches the page, runs deterministic auth detection first
 
 ```bash
 cd backend
-python -m venv .venv
+/opt/homebrew/bin/python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium

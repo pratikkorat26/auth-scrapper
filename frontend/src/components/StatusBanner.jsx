@@ -3,6 +3,10 @@ export default function StatusBanner({ type, message }) {
     return null;
   }
 
-  return <div className={`banner banner-${type}`}>{message}</div>;
+  return (
+    <section className={`banner banner-${type}`} aria-live="polite">
+      <div className="banner-kicker">Request issue</div>
+      <p>{message}</p>
+    </section>
+  );
 }
-

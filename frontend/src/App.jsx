@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { analyzeUrl } from "./api/client";
 import ResultCard from "./components/ResultCard";
@@ -6,11 +6,36 @@ import StatusBanner from "./components/StatusBanner";
 import UrlForm from "./components/UrlForm";
 import "./styles.css";
 
+const ANALYSIS_STAGES = [
+  { label: "Source scan", detail: "Reads the page structure first." },
+  { label: "Rendered check", detail: "Falls back to browser rendering when needed." },
+  { label: "Editorial summary", detail: "Returns the clearest auth snippet it can verify." },
+];
+
 export default function App() {
   const [url, setUrl] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      return undefined;
+    }
+
+    function handleKeydown(event) {
+      if (event.key === "Escape") {
+        setIsModalOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeydown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [isModalOpen]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -30,18 +55,92 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <section className="hero">
-        <p className="eyebrow">AI Engineer Assessment</p>
-        <h1>Authentication Component Detector</h1>
-        <p className="lead">
-          Submit a public website URL and inspect the authentication components the backend can detect with
-          deterministic parsing, Playwright rendering, and Gemini fallback for harder pages.
-        </p>
+      <div className="page-glow page-glow-one" aria-hidden="true" />
+      <div className="page-glow page-glow-two" aria-hidden="true" />
+
+      <section className="hero card hero-card">
+        <div className="hero-topline">
+          <p className="eyebrow">Auth surface review</p>
+          <button className="hero-link" type="button" onClick={() => setIsModalOpen(true)}>
+            How auth extraction works
+          </button>
+        </div>
+
+        <div className="hero-copy">
+          <h1>Review sign-in surfaces faster.</h1>
+          <p className="lead">Paste a public URL to get a clean readout and the strongest auth snippet we can verify.</p>
+        </div>
       </section>
 
-      <UrlForm url={url} onChange={setUrl} onSubmit={handleSubmit} isLoading={isLoading} />
-      <StatusBanner type="error" message={error} />
-      <ResultCard result={result} />
+      <section className="main-column">
+        <UrlForm url={url} onChange={setUrl} onSubmit={handleSubmit} isLoading={isLoading} />
+        <StatusBanner type="error" message={error} />
+
+        {isLoading ? (
+          <section className="card state-card state-card-loading" aria-live="polite">
+            <div className="state-kicker">Analysis in progress</div>
+            <h2>Checking the page and looking for the strongest auth evidence.</h2>
+            <p>
+              The app is scanning the initial markup, then escalating to a rendered pass if the page needs a
+              little more context.
+            </p>
+            <div className="loading-meter" aria-hidden="true">
+              <span />
+            </div>
+          </section>
+        ) : null}
+
+        {!isLoading && !result && !error ? (
+          <section className="card state-card state-card-empty">
+            <div className="state-kicker">Ready when you are</div>
+            <h2>Start with any public page that likely exposes sign in, sign up, or account entry points.</h2>
+            <p>
+              The first pass is built to feel complete even before a result appears, so you always know where
+              to begin and what kind of evidence will come back.
+            </p>
+          </section>
+        ) : null}
+
+        <ResultCard result={result} />
+      </section>
+
+      {isModalOpen ? (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsModalOpen(false);
+            }
+          }}
+        >
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-extraction-title">
+            <div className="modal-header">
+              <div>
+                <p className="modal-kicker">How auth extraction works</p>
+                <h2 id="auth-extraction-title">Three quick stages</h2>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={() => setIsModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal-stage-list">
+              {ANALYSIS_STAGES.map((stage) => (
+                <article className="modal-stage" key={stage.label}>
+                  <span className="modal-stage-title">{stage.label}</span>
+                  <p>{stage.detail}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

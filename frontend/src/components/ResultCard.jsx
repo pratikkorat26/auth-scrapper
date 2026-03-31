@@ -5,7 +5,7 @@ function SnippetViewer({ title, snippet, compact = false }) {
     <div className={`snippet-block${compact ? " snippet-block-compact" : ""}`}>
       <div className="snippet-header">
         {compact ? <h4>{title}</h4> : <h3>{title}</h3>}
-        <span className="snippet-language">HTML</span>
+        <span className="snippet-language">Primary HTML evidence</span>
       </div>
       <div className={`snippet-viewer${compact ? " snippet-viewer-compact" : ""}`} aria-label={`${title} viewer`}>
         {lines.length ? (
@@ -22,11 +22,52 @@ function SnippetViewer({ title, snippet, compact = false }) {
             </code>
           </pre>
         ) : (
-          <div className="snippet-empty">No HTML snippet returned.</div>
+          <div className="snippet-empty">
+            <strong>No snippet was returned for this pass.</strong>
+            <span>The analysis may still be useful, but there was no primary HTML excerpt to feature.</span>
+          </div>
         )}
       </div>
     </div>
   );
+}
+
+const STATUS_COPY = {
+  found: "Auth surface found",
+  partial_auth_surface: "Partial auth surface found",
+  blocked_or_inconclusive: "Analysis was limited",
+  not_found: "No auth surface found",
+};
+
+const MODE_COPY = {
+  static_html: "Static HTML",
+  browser_fallback: "Rendered browser pass",
+};
+
+function toDisplayLabel(value) {
+  return value
+    ?.replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function buildSummary(result, statusLabel, modeLabel) {
+  if (result.message) {
+    return result.message;
+  }
+
+  if (result.status === "found") {
+    return `The detector found a likely authentication surface during the ${modeLabel.toLowerCase()} and returned the strongest snippet it could verify.`;
+  }
+
+  if (result.status === "partial_auth_surface") {
+    return `The detector found a partial entry point to authentication during the ${modeLabel.toLowerCase()}, but the evidence was not complete.`;
+  }
+
+  if (result.status === "blocked_or_inconclusive") {
+    return `The run stayed inconclusive after the ${modeLabel.toLowerCase()}, so this should be treated as a limited read rather than a final answer.`;
+  }
+
+  return `${statusLabel} after the ${modeLabel.toLowerCase()}.`;
 }
 
 export default function ResultCard({ result }) {
@@ -34,45 +75,65 @@ export default function ResultCard({ result }) {
     return null;
   }
 
-  const statusLabel = result.status?.replaceAll("_", " ") || (result.found ? "found" : "not found");
+  const normalizedStatus = result.status || (result.found ? "found" : "not_found");
+  const statusLabel = STATUS_COPY[normalizedStatus] || toDisplayLabel(normalizedStatus) || "Analysis result";
+  const modeLabel = MODE_COPY[result.analysis_mode] || toDisplayLabel(result.analysis_mode) || "Standard pass";
+  const summary = buildSummary(result, statusLabel, modeLabel);
+  const metadata = [
+    { label: "Mode", value: modeLabel },
+    { label: "Confidence", value: result.confidence ?? "N/A" },
+    { label: "Fallback", value: result.fallback_used ? "Used" : "Not needed" },
+    { label: "Interaction", value: result.interaction_used ? "Triggered" : "Not used" },
+    { label: "AI review", value: result.ai_used ? (result.ai_refined ? "Gemini refined" : "Gemini assisted") : "Not used" },
+  ];
+
+  if (result.ai_provider) {
+    metadata.push({ label: "Provider", value: result.ai_provider });
+  }
 
   return (
-    <section className="card">
+    <section className="card result-card">
       <div className="result-header">
-        <h2>Analysis Result</h2>
-        <span className={`pill pill-status pill-${result.status || (result.found ? "found" : "not_found")}`}>
+        <div className="result-heading">
+          <p className="result-kicker">Analysis report</p>
+          <h2>{statusLabel}</h2>
+        </div>
+        <span className={`pill pill-status pill-${normalizedStatus}`}>
           {statusLabel}
         </span>
       </div>
 
-      <div className="result-summary">
-        <div className="summary-chip">{result.analysis_mode === "browser_fallback" ? "Browser Fallback" : "Static HTML"}</div>
-        <div className="summary-chip">Confidence {result.confidence}</div>
-        {result.fallback_used ? <div className="summary-chip">Fallback Used</div> : null}
-        {result.interaction_used ? <div className="summary-chip">Interaction Reveal</div> : null}
-        {result.ai_used ? <div className="summary-chip">Gemini Used</div> : null}
-        {result.ai_refined ? <div className="summary-chip">Gemini Refined</div> : null}
-        {result.ai_provider ? <div className="summary-chip">{result.ai_provider}</div> : null}
-      </div>
+      <p className="analysis-summary">{summary}</p>
 
-      <dl className="result-grid">
-        <div>
-          <dt>URL</dt>
-          <dd>{result.url}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{statusLabel}</dd>
-        </div>
-        <div>
-          <dt>Signals</dt>
-          <dd>{result.signals.length ? result.signals.join(", ") : "None"}</dd>
-        </div>
-        <div>
-          <dt>Message</dt>
-          <dd>{result.message}</dd>
-        </div>
+      <dl className="meta-row" aria-label="Analysis metadata">
+        {metadata.map((item) => (
+          <div className="meta-item" key={item.label}>
+            <dt>{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        ))}
       </dl>
+
+      <div className="report-grid">
+        <section className="report-panel">
+          <div className="panel-label">Page reviewed</div>
+          <p className="report-text report-url">{result.url || "No URL returned"}</p>
+        </section>
+
+        <section className="report-panel">
+          <div className="panel-label">Signals observed</div>
+          <p className="report-text">
+            {result.signals?.length ? result.signals.map(toDisplayLabel).join(", ") : "No explicit signals were reported."}
+          </p>
+        </section>
+
+        <section className="report-panel report-panel-wide">
+          <div className="panel-label">Run notes</div>
+          <p className="report-text">
+            {result.message || "No additional run notes were returned for this analysis."}
+          </p>
+        </section>
+      </div>
 
       <SnippetViewer title="Primary Snippet" snippet={result.snippet} />
     </section>
