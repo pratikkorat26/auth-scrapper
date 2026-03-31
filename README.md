@@ -86,7 +86,7 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Backend runs on `http://localhost:8000`.
+Default local backend URL: `http://localhost:8000`.
 
 ### Frontend
 
@@ -96,17 +96,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs on `http://localhost:5173`.
-
-### Verification
-
-From the repo root:
-
-```bash
-make check
-```
-
-That runs the backend test suite and the frontend production build using the committed project workflow.
+Default local frontend URL: `http://localhost:5173`.
 
 ### Quick API Check
 
@@ -162,8 +152,6 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 - Playwright Chromium install required for best results
 - Backend settings come from `backend/.env`, based on `backend/.env.example`
 - Important runtime settings include browser timeout/headless mode, frontend origin, fallback behavior, and limited auth reveal toggles
-- `VITE_API_BASE_URL` is optional for same-origin deployments such as a single Docker container
-- for single-container Docker builds, do not set `frontend/.env` with `VITE_API_BASE_URL`
 
 ## Limitations
 
@@ -174,12 +162,6 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 
 ## Tests
 
-Project-level verification:
-
-```bash
-make check
-```
-
 Backend-only tests:
 
 ```bash
@@ -187,13 +169,14 @@ cd backend
 ./.venv/bin/pytest
 ```
 
-Current CI checks:
+Frontend build validation:
 
-- backend pytest
-- frontend production build
+```bash
+cd frontend
+npm run build
+```
 
 ## Additional Submission Docs
 
 - [Assessment Summary](docs/assessment-summary.md)
 - [Tested Sites Evidence](docs/tested-sites.md)
-- [DigitalOcean Droplet Docker Deployment](docs/digitalocean-droplet.md)
