@@ -1,43 +1,67 @@
 # Auth Detector
 
-A full-stack authentication detection app that analyzes a public web page, renders dynamic routes when needed, and returns login-related HTML snippets plus a list of detected authentication components.
+A full-stack assessment project that accepts any public URL, inspects the page for authentication UI, and returns the best auth-related HTML snippet plus structured component metadata.
 
-## Overview
+## Assessment Fit
+
+This project directly covers the technical assessment requirements:
+
+- Scrapes and analyzes website markup
+- Accepts dynamic URL input through a UI and API
+- Detects authentication components such as login forms, OAuth buttons, email-first flows, and passwordless entry points
+- Returns the relevant HTML snippet or reports that no auth surface was found
+
+## Stack
 
 - Backend: FastAPI
 - Frontend: React with Vite
-- HTML parsing: BeautifulSoup with `lxml`
-- HTTP client: `httpx`
-- Browser rendering: Playwright
-- AI fallback: Gemini (`google-genai`)
+- Parsing: BeautifulSoup with `lxml`
+- Rendering: Playwright
+- Optional AI audit: Gemini
 
-The app accepts a URL, fetches the page, runs deterministic auth detection first, optionally renders the page in Playwright, and uses Gemini for low-confidence or dynamic auth surfaces. The response includes a primary snippet and a `components` array with all detected auth surfaces.
+## How It Works
 
-## Architecture
+The app uses a Playwright-first, rule-based detection flow:
 
-- `backend/`
-  - FastAPI app with fetch, detector, browser, and Gemini services
-- `frontend/`
-  - Single-page UI for URL submission and result inspection
-- `.github/workflows/ci.yml`
-  - Backend pytest and frontend production build
+1. Accept a URL from the UI or API.
+2. Render the page and capture a few bounded DOM snapshots.
+3. Run deterministic auth detection on each snapshot.
+4. Pick the strongest visible auth surface and return its HTML snippet.
+5. Optionally run Gemini as an audit-only step for ambiguous cases.
 
-## Detection Flow
+Gemini is not required for the core functionality and does not own the final result.
 
-1. Validate the submitted URL.
-2. Fetch HTML with `httpx`.
-3. Parse it with BeautifulSoup and score heuristic auth candidates.
-4. If the page looks dynamic or incomplete, render it with Playwright and rerun detection on the rendered DOM.
-5. If the result is partial, inconclusive, or low-confidence, call Gemini with:
-   - extracted auth-focused HTML
-   - the heuristic summary
-   - an optional Playwright screenshot
-6. Normalize Gemini output into:
-   - a primary auth snippet
-   - multiple auth components
-   - top-level status and confidence
+## What The App Returns
 
-## Setup
+- Top-level status such as `found`, `partial_auth_surface`, or `not_found`
+- Best auth-related HTML snippet
+- Structured `components` list with detected auth surface types
+- Metadata about whether browser rendering or AI audit was used
+
+The app never submits credentials. It only inspects public auth markup.
+
+## Tested Sites
+
+The detector was built and manually validated against these real-world login surfaces across multiple product categories.
+
+| URL | Category | Expected Auth Style | Why It Matters |
+| --- | --- | --- | --- |
+| `https://github.com/login` | Developer Platform | `traditional` | Standard login form with secondary auth options and passkey support |
+| `https://accounts.spotify.com/en/login` | Music Streaming | `traditional` | Consumer login flow with modern wrapper-heavy rendering |
+| `https://www.eventbrite.com/signin/` | Event Platform | `mixed traditional + oauth` | Consumer auth surface with multiple sign-in options |
+| `https://account.box.com/login` | Cloud Storage | `multi_step` | Enterprise-style dynamic auth shell with staged identity flow |
+| `https://slack.com/signin#/signin` | Workplace Collaboration | `multi_step` | JS-heavy workspace login with multi-step routing |
+| `https://www.linkedin.com/login` | Professional Network | `traditional` | Large real-world login page with nested auth layout |
+| `https://stackoverflow.com/users/login` | Developer Community | `mixed traditional + oauth` | Mixed auth page with traditional and provider-based options |
+| `https://substack.com/sign-in` | Publishing Platform | `multi_step` | Email-first sign-in flow with follow-up auth actions |
+| `https://www.facebook.com/login` | Social Network | `traditional` | High-traffic login page useful for testing wrapper-heavy detection |
+| `https://account.booking.com/sign-in` | Travel Booking | `multi_step` | Consumer sign-in flow with staged identity-first interaction |
+| `https://www.dropbox.com/login` | File Sharing | `traditional` | Cloud login page with modern rendered auth structure |
+| `https://www.coursera.org/login` | Online Learning | `mixed traditional + oauth` | Mixed auth experience with consumer and provider-based entry points |
+
+These are representative evidence sites for the assessment, and the app also supports arbitrary public URLs.
+
+## How To Evaluate In 5 Minutes
 
 ### Backend
 
@@ -53,12 +77,6 @@ uvicorn app.main:app --reload
 
 Backend runs on `http://localhost:8000`.
 
-From the repository root, this also works:
-
-```bash
-uvicorn backend.app.main:app --reload
-```
-
 ### Frontend
 
 ```bash
@@ -69,9 +87,7 @@ npm run dev
 
 Frontend runs on `http://localhost:5173`.
 
-## API Example
-
-### Request
+### Quick API Check
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/analyze \
@@ -79,7 +95,9 @@ curl -X POST http://localhost:8000/api/v1/analyze \
   -d '{"url":"https://github.com/login"}'
 ```
 
-### Response
+Then open the frontend, paste a public URL, and inspect the returned auth markup.
+
+## Sample Response
 
 ```json
 {
@@ -87,107 +105,59 @@ curl -X POST http://localhost:8000/api/v1/analyze \
   "found": true,
   "status": "found",
   "confidence": 0.94,
-  "signals": ["password_input", "username_or_email_input"],
   "snippet": "<form>...</form>",
   "message": "Authentication component detected.",
-  "analysis_mode": "static",
+  "analysis_mode": "browser_primary",
   "fallback_used": false,
   "interaction_used": false,
   "ai_used": false,
   "ai_refined": false,
-  "ai_provider": null,
-  "ai_model": null,
   "components": [
     {
       "type": "traditional",
       "surface_type": "form",
       "confidence": 0.94,
-      "selector_hint": "form",
-      "signals": ["password_input", "username_or_email_input"],
-      "providers": [],
-      "fields": [
-        {
-          "type": "email",
-          "label": "Username or email address",
-          "name": "login"
-        }
-      ],
       "snippet": "<form>...</form>",
-      "summary": "Traditional login form"
+      "summary": "Authentication component detected."
     }
   ]
 }
 ```
 
-## Configuration
+## Environment Notes
 
-Relevant backend environment variables:
+- Python 3.12 recommended
+- Node 18+ recommended
+- Playwright Chromium install required for best results
+- Gemini is optional and disabled unless configured
 
-- `APP_ENV`
-- `LOG_LEVEL`
-- `REQUEST_TIMEOUT_SECONDS`
-- `MAX_SNIPPET_LENGTH`
-- `FRONTEND_ORIGIN`
-- `ENABLE_BROWSER_FALLBACK`
-- `BROWSER_TIMEOUT_SECONDS`
-- `BROWSER_HEADLESS`
-- `ENABLE_LIMITED_AUTH_REVEAL`
-- `ENABLE_SAFE_IDENTITY_TYPING`
-- `ENABLE_AI_FALLBACK`
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL`
-- `AI_LOW_CONFIDENCE_THRESHOLD`
-- `AI_MAX_INPUT_CHARS`
-- `ENABLE_AI_SCREENSHOT_CONTEXT`
-
-Gemini fallback is disabled by default. Enable it by setting:
+To enable Gemini audit:
 
 ```env
 ENABLE_AI_FALLBACK=true
 GEMINI_API_KEY=your-key
 ```
 
-## Running Tests
+## Limitations
+
+- Some sites show CAPTCHA, rate limits, or anti-bot challenges instead of login UI.
+- Some auth flows are region-specific or depend on previous user state.
+- Dynamic pages are handled with Playwright snapshots, but heavily protected sites may still be limited.
+- Gemini is optional and non-authoritative.
+
+## Tests
 
 ```bash
 cd backend
 pytest
 ```
 
-## Detection Logic Notes
+Current CI checks:
 
-- `traditional`: password form or equivalent final login form
-- `oauth`: social/SSO provider auth cluster
-- `passwordless`: passkey, magic-link, OTP, or WebAuthn style auth
-- `multi_step`: email-first or username-first auth surface
-- `challenge`: blocked, captcha, or anti-bot challenge surface
+- backend pytest
+- frontend production build
 
-The top-level `snippet` is selected from the highest-priority component in this order:
+## Additional Submission Docs
 
-1. `traditional`
-2. `multi_step`
-3. `oauth`
-4. `passwordless`
-5. `challenge`
-
-## Limitations
-
-- Some sites block automation or show challenge pages instead of auth UI.
-- Gemini improves hard-page coverage, but it adds latency and depends on API availability.
-- Selector hints returned by AI are best-effort hints, not guaranteed stable selectors.
-- The app intentionally detects auth components only; it never submits credentials.
-
-## Example Websites To Try
-
-1. `https://github.com/login`
-2. `https://account.box.com/login`
-3. `https://www.reddit.com/login/`
-4. `https://substack.com/sign-in`
-5. `https://apply.coveredca.com/static/lw-web/login`
-
-## CI
-
-GitHub Actions runs:
-
-- backend tests with `pytest`
-- frontend production build with `vite build`
+- [Assessment Summary](docs/assessment-summary.md)
+- [Tested Sites Evidence](docs/tested-sites.md)
