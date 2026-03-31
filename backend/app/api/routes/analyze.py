@@ -54,6 +54,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         status=result.detection.status,
         signals=result.detection.signals,
         snippet=result.detection.snippet,
+        partial_html_markup=result.detection.partial_html_markup,
         message=result.detection.message,
         analysis_mode=result.analysis_mode,
         fallback_used=result.fallback_used,

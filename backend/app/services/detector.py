@@ -43,6 +43,7 @@ NEGATIVE_KEYWORDS = (
 PROVIDER_KEYWORDS = ("google", "apple", "facebook", "github", "linkedin", "microsoft")
 AUTH_CONTAINER_HINTS = ("login", "signin", "sign-in", "auth", "account", "session", "credential")
 PASSWORDLESS_KEYWORDS = ("passkey", "magic link", "email me a link", "otp", "verification code", "one-time code")
+PARTIAL_MARKUP_MAX_CHARS = 5000
 
 
 @dataclass
@@ -88,6 +89,7 @@ class DetectionResult:
     actions: list[ExtractedAction] = field(default_factory=list)
     providers: list[str] = field(default_factory=list)
     components: list[AuthComponent] = field(default_factory=list)
+    partial_html_markup: Optional[str] = None
 
 
 @dataclass
@@ -140,6 +142,17 @@ def detect_auth_component(html: str) -> DetectionResult:
     components = [_component_from_analysis(item) for item in component_analyses[:5]]
     primary = choose_primary_component(components)
 
+    partial_html_markup: Optional[str] = None
+    if best.status == "partial_auth_surface":
+        raw = best.element.prettify(formatter="minimal").strip()
+        if len(raw) > PARTIAL_MARKUP_MAX_CHARS:
+            truncated = raw[: PARTIAL_MARKUP_MAX_CHARS - 3].rstrip()
+            last_newline = truncated.rfind("\n")
+            if last_newline > 0:
+                truncated = truncated[:last_newline].rstrip()
+            raw = truncated + "\n..."
+        partial_html_markup = raw
+
     return DetectionResult(
         found=best.status in {"found", "partial_auth_surface"},
         confidence=primary.confidence if primary else best.confidence,
@@ -152,6 +165,7 @@ def detect_auth_component(html: str) -> DetectionResult:
         actions=[],
         providers=primary.providers if primary else best.providers,
         components=components,
+        partial_html_markup=partial_html_markup,
     )
 
 

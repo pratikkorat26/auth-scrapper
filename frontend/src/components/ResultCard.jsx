@@ -1,11 +1,12 @@
-function SnippetViewer({ title, snippet, compact = false }) {
+function SnippetViewer({ title, snippet, compact = false, variant = "" }) {
   const lines = snippet ? snippet.split("\n") : [];
+  const languageLabel = variant === "partial" ? "Partial HTML markup" : "Primary HTML evidence";
 
   return (
-    <div className={`snippet-block${compact ? " snippet-block-compact" : ""}`}>
+    <div className={`snippet-block${compact ? " snippet-block-compact" : ""}${variant ? ` snippet-block-${variant}` : ""}`}>
       <div className="snippet-header">
         {compact ? <h4>{title}</h4> : <h3>{title}</h3>}
-        <span className="snippet-language">Primary HTML evidence</span>
+        <span className="snippet-language">{languageLabel}</span>
       </div>
       <div className={`snippet-viewer${compact ? " snippet-viewer-compact" : ""}`} aria-label={`${title} viewer`}>
         {lines.length ? (
@@ -136,6 +137,14 @@ export default function ResultCard({ result }) {
       </div>
 
       <SnippetViewer title="Primary Snippet" snippet={result.snippet} />
+
+      {result.status === "partial_auth_surface" && result.partial_html_markup && (
+        <SnippetViewer
+          title="Partial Auth Surface Markup"
+          snippet={result.partial_html_markup}
+          variant="partial"
+        />
+      )}
     </section>
   );
 }

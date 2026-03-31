@@ -36,6 +36,7 @@ class AnalyzeResponse(BaseModel):
     status: str
     signals: list[str]
     snippet: Optional[str] = None
+    partial_html_markup: Optional[str] = None
     message: str
     analysis_mode: str
     fallback_used: bool
