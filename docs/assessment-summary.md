@@ -15,7 +15,7 @@ This submission is a full-stack auth detection app with:
 
 ## Approach
 
-The system uses Playwright-first rendering so dynamic auth pages can be analyzed after the page is fully rendered. A rule-based detector then evaluates the rendered HTML and selects the best visible auth component. Gemini is optional and used only as an audit step for ambiguous cases.
+The system uses Playwright-first rendering so dynamic auth pages can be analyzed after the page is fully rendered. A rule-based detector then evaluates the rendered HTML and selects the best visible auth component.
 
 This design was chosen to keep the core result deterministic, explainable, and robust on modern JavaScript-heavy websites.
 

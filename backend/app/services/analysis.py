@@ -1,34 +1,17 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from .auth_shared import BLOCKED_MESSAGE, BLOCKED_TEXT_RE, COMPONENT_PRIORITY, STATUS_PRIORITY, default_message_for_status
 from .browser import BrowserMarkupSnapshot, render_html
 from .detector import DetectionResult, choose_primary_component, detect_auth_component
 from .fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html, is_forbidden_fetch_error
-from .gemini import ai_fallback_available, audit_detection_with_ai, should_use_ai_fallback
 
 logger = logging.getLogger(__name__)
-BLOCKED_MESSAGE = "This site appears to block automated access or scraping, so auth extraction is limited."
-
-STATUS_PRIORITY = {
-    "found": 3,
-    "partial_auth_surface": 2,
-    "blocked_or_inconclusive": 1,
-    "not_found": 0,
-}
-COMPONENT_PRIORITY = {
-    "traditional": 4,
-    "multi_step": 3,
-    "oauth": 2,
-    "passwordless": 2,
-    "challenge": 1,
-    "unknown_auth_surface": 0,
-}
 
 
 @dataclass
@@ -37,24 +20,16 @@ class AnalysisResult:
     analysis_mode: str
     fallback_used: bool
     interaction_used: bool
-    ai_used: bool
-    ai_refined: bool
-    ai_provider: Optional[str]
-    ai_model: Optional[str]
 
 
 async def analyze_url(url: str) -> AnalysisResult:
     analysis_mode = "browser_primary"
     fallback_used = False
     interaction_used = False
-    analysis_html = ""
-    screenshot_base64: Optional[str] = None
 
     try:
         browser_result = await render_html(url)
         interaction_used = browser_result.interaction_used or browser_result.typing_used
-        analysis_html = browser_result.html
-        screenshot_base64 = browser_result.screenshot_base64
         detection = _select_best_detection(browser_result.snapshots or [_final_snapshot(browser_result.html)])
         logger.info(
             "analysis path evaluated",
@@ -65,7 +40,6 @@ async def analyze_url(url: str) -> AnalysisResult:
         logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "error": str(browser_exc)})
         try:
             html = await fetch_html(url)
-            analysis_html = html
             detection = detect_auth_component(html)
             analysis_mode = "static_html"
             logger.info(
@@ -87,48 +61,11 @@ async def analyze_url(url: str) -> AnalysisResult:
             )
             logger.info("analysis path evaluated", extra={"url": url, "path": "static_failed", "error": str(fetch_exc)})
 
-    ai_used = False
-    ai_refined = False
-    ai_provider = None
-    ai_model = None
-    if ai_fallback_available() and should_use_ai_fallback(detection):
-        ai_used = True
-        audit = await audit_detection_with_ai(
-            url=url,
-            html=analysis_html,
-            detection=detection,
-            screenshot_base64=screenshot_base64,
-        )
-        if audit is not None:
-            ai_refined = audit.disagreed
-            ai_provider = audit.provider
-            ai_model = audit.model
-            if detection.status == "blocked_or_inconclusive" and detection.message == BLOCKED_MESSAGE:
-                audit = None
-                ai_refined = False
-                ai_provider = None
-                ai_model = None
-            else:
-                logger.info(
-                    "gemini audit evaluated",
-                    extra={
-                        "url": url,
-                        "path": "gemini_audit_ignored",
-                        "disagreed": audit.disagreed,
-                        "audit_status": audit.status,
-                        "audit_confidence": audit.ai_confidence,
-                    },
-                )
-
     return AnalysisResult(
         detection=detection,
         analysis_mode=analysis_mode,
         fallback_used=fallback_used,
         interaction_used=interaction_used,
-        ai_used=ai_used,
-        ai_refined=ai_refined,
-        ai_provider=ai_provider,
-        ai_model=ai_model,
     )
 
 
@@ -166,7 +103,7 @@ def _select_best_detection(snapshots: list[BrowserMarkupSnapshot]) -> DetectionR
             confidence=0.0,
             signals=[],
             snippet=None,
-            message="Authentication component not found.",
+            message=default_message_for_status("not_found"),
             status="not_found",
             components=[],
         )
@@ -265,9 +202,4 @@ def is_blocked_or_challenged_html(html: str) -> bool:
             ],
         )
     ).lower()
-    return bool(
-        re.search(
-            r"blocked by network security|access denied|captcha|unusual activity|verify you are human|request blocked",
-            text,
-        )
-    )
+    return bool(BLOCKED_TEXT_RE.search(text))

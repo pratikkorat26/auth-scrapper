@@ -1,6 +1,13 @@
-from typing import Literal, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+from ..services.auth_shared import analysis_mode_label_for, is_protected_page, status_label_for
+
+if TYPE_CHECKING:
+    from ..services.analysis import AnalysisResult
 
 
 class AnalyzeRequest(BaseModel):
@@ -34,18 +41,54 @@ class AnalyzeResponse(BaseModel):
     found: bool
     confidence: float = Field(..., ge=0.0, le=1.0)
     status: str
+    status_label: str
     signals: list[str]
     snippet: Optional[str] = None
     partial_html_markup: Optional[str] = None
     message: str
     analysis_mode: str
+    analysis_mode_label: str
+    protected_page: bool
     fallback_used: bool
     interaction_used: bool
-    ai_used: bool
-    ai_refined: bool
-    ai_provider: Optional[str] = None
-    ai_model: Optional[str] = None
     components: list[AuthComponentResponse] = Field(default_factory=list)
+
+    @classmethod
+    def from_analysis_result(cls, url: str, result: "AnalysisResult") -> "AnalyzeResponse":
+        detection = result.detection
+        return cls(
+            url=url,
+            found=detection.found,
+            confidence=detection.confidence,
+            status=detection.status,
+            status_label=status_label_for(detection.status),
+            signals=detection.signals,
+            snippet=detection.snippet,
+            partial_html_markup=detection.partial_html_markup,
+            message=detection.message,
+            analysis_mode=result.analysis_mode,
+            analysis_mode_label=analysis_mode_label_for(result.analysis_mode),
+            protected_page=is_protected_page(detection.status, detection.message),
+            fallback_used=result.fallback_used,
+            interaction_used=result.interaction_used,
+            components=[
+                AuthComponentResponse(
+                    type=component.type,
+                    surface_type=component.surface_type,
+                    confidence=component.confidence,
+                    selector_hint=component.selector_hint,
+                    signals=component.signals,
+                    providers=component.providers,
+                    fields=[
+                        field if isinstance(field, dict) else field.__dict__
+                        for field in component.fields
+                    ],
+                    snippet=component.snippet,
+                    summary=component.summary,
+                )
+                for component in detection.components
+            ],
+        )
 
 
 class HealthResponse(BaseModel):

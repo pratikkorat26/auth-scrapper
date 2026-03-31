@@ -17,7 +17,6 @@ This project directly covers the technical assessment requirements:
 - Frontend: React with Vite
 - Parsing: BeautifulSoup with `lxml`
 - Rendering: Playwright
-- Optional AI audit: Gemini
 
 ## How It Works
 
@@ -27,16 +26,13 @@ The app uses a Playwright-first, rule-based detection flow:
 2. Render the page and capture a few bounded DOM snapshots.
 3. Run deterministic auth detection on each snapshot.
 4. Pick the strongest visible auth surface and return its HTML snippet.
-5. Optionally run Gemini as an audit-only step for ambiguous cases.
-
-Gemini is not required for the core functionality and does not own the final result.
 
 ## What The App Returns
 
 - Top-level status such as `found`, `partial_auth_surface`, or `not_found`
 - Best auth-related HTML snippet
 - Structured `components` list with detected auth surface types
-- Metadata about whether browser rendering or AI audit was used
+- Metadata about whether browser rendering or fallback fetching was used
 
 The app never submits credentials. It only inspects public auth markup.
 
@@ -104,14 +100,15 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
   "url": "https://github.com/login",
   "found": true,
   "status": "found",
+  "status_label": "Auth surface found",
   "confidence": 0.94,
   "snippet": "<form>...</form>",
   "message": "Authentication component detected.",
   "analysis_mode": "browser_primary",
+  "analysis_mode_label": "Rendered browser pass",
+  "protected_page": false,
   "fallback_used": false,
   "interaction_used": false,
-  "ai_used": false,
-  "ai_refined": false,
   "components": [
     {
       "type": "traditional",
@@ -129,21 +126,12 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 - Python 3.12 recommended
 - Node 18+ recommended
 - Playwright Chromium install required for best results
-- Gemini is optional and disabled unless configured
-
-To enable Gemini audit:
-
-```env
-ENABLE_AI_FALLBACK=true
-GEMINI_API_KEY=your-key
-```
 
 ## Limitations
 
 - Some sites show CAPTCHA, rate limits, or anti-bot challenges instead of login UI.
 - Some auth flows are region-specific or depend on previous user state.
 - Dynamic pages are handled with Playwright snapshots, but heavily protected sites may still be limited.
-- Gemini is optional and non-authoritative.
 
 ## Tests
 

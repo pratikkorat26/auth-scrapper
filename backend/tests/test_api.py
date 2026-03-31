@@ -31,13 +31,9 @@ def test_analyze_valid_url(monkeypatch) -> None:
                     )
                 ],
             ),
-            analysis_mode="static",
+            analysis_mode="static_html",
             fallback_used=False,
             interaction_used=False,
-            ai_used=False,
-            ai_refined=False,
-            ai_provider=None,
-            ai_model=None,
         )
 
     monkeypatch.setattr("app.api.routes.analyze.analyze_url", fake_analyze_url)
@@ -46,7 +42,9 @@ def test_analyze_valid_url(monkeypatch) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["found"] is True
-    assert data["ai_used"] is False
+    assert data["status_label"] == "Auth surface found"
+    assert data["analysis_mode_label"] == "Static HTML"
+    assert data["protected_page"] is False
     assert data["components"][0]["type"] == "traditional"
 
 
@@ -62,16 +60,16 @@ def test_analyze_partial_auth_surface(monkeypatch) -> None:
                 found=True,
                 confidence=0.72,
                 status="partial_auth_surface",
-                signals=["sso_provider", "ai_gemini"],
+                signals=["sso_provider"],
                 snippet="<section>...</section>",
-                message="Gemini identified multiple auth components.",
+                message="Partial authentication surface detected.",
                 components=[
                     AuthComponent(
                         type="oauth",
                         surface_type="sso_only",
                         confidence=0.72,
                         selector_hint="button:has-text('Continue with Google')",
-                        signals=["sso_provider", "ai_gemini"],
+                        signals=["sso_provider"],
                         providers=["Google"],
                         fields=[],
                         snippet="<section>...</section>",
@@ -82,10 +80,6 @@ def test_analyze_partial_auth_surface(monkeypatch) -> None:
             analysis_mode="browser_fallback",
             fallback_used=True,
             interaction_used=True,
-            ai_used=True,
-            ai_refined=True,
-            ai_provider="gemini",
-            ai_model="gemini-2.5-flash",
         )
 
     monkeypatch.setattr("app.api.routes.analyze.analyze_url", fake_analyze_url)
@@ -93,6 +87,6 @@ def test_analyze_partial_auth_surface(monkeypatch) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["ai_used"] is True
-    assert data["ai_provider"] == "gemini"
+    assert data["status_label"] == "Partial auth surface found"
+    assert data["analysis_mode_label"] == "Browser Fallback"
     assert data["components"][0]["providers"] == ["Google"]
