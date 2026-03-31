@@ -7,15 +7,27 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from ..core.config import get_settings
-from .browser import render_html
-from .detector import DetectionResult, detect_auth_component
+from .browser import BrowserMarkupSnapshot, render_html
+from .detector import DetectionResult, choose_primary_component, detect_auth_component
 from .fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
-from .gemini import ai_fallback_available, refine_detection_with_ai, should_use_ai_fallback
+from .gemini import ai_fallback_available, audit_detection_with_ai, should_use_ai_fallback
 
-AUTH_INTENT_HINTS = ("login", "log in", "sign in", "signin", "account", "authenticate")
-STRONG_DETECTION_CONFIDENCE = 0.8
 logger = logging.getLogger(__name__)
+
+STATUS_PRIORITY = {
+    "found": 3,
+    "partial_auth_surface": 2,
+    "blocked_or_inconclusive": 1,
+    "not_found": 0,
+}
+COMPONENT_PRIORITY = {
+    "traditional": 4,
+    "multi_step": 3,
+    "oauth": 2,
+    "passwordless": 2,
+    "challenge": 1,
+    "unknown_auth_surface": 0,
+}
 
 
 @dataclass
@@ -31,64 +43,74 @@ class AnalysisResult:
 
 
 async def analyze_url(url: str) -> AnalysisResult:
-    analysis_mode = "static"
+    analysis_mode = "browser_primary"
     fallback_used = False
     interaction_used = False
-    screenshot_base64: Optional[str] = None
     analysis_html = ""
-    browser_url: Optional[str] = None
-    fetch_error: Optional[Exception] = None
+    screenshot_base64: Optional[str] = None
 
     try:
-        html = await fetch_html(url)
-        analysis_html = html
-        detection = detect_auth_component(html)
+        browser_result = await render_html(url)
+        interaction_used = browser_result.interaction_used or browser_result.typing_used
+        analysis_html = browser_result.html
+        screenshot_base64 = browser_result.screenshot_base64
+        detection = _select_best_detection(browser_result.snapshots or [_final_snapshot(browser_result.html)])
         logger.info(
             "analysis path evaluated",
-            extra={"url": url, "path": "static", "status": detection.status, "confidence": detection.confidence},
+            extra={"url": url, "path": "browser_primary", "status": detection.status, "confidence": detection.confidence},
         )
-    except InvalidContentTypeError:
-        raise
-    except (FetchError, UpstreamTimeoutError) as exc:
-        fetch_error = exc
-        detection = DetectionResult(
-            found=False,
-            confidence=0.0,
-            signals=[],
-            snippet=None,
-            message=str(exc),
-            status="blocked_or_inconclusive",
-            components=[],
-        )
-        logger.info("analysis path evaluated", extra={"url": url, "path": "static_failed", "error": str(exc)})
-
-    should_try_browser = fetch_error is not None or _should_use_browser_fallback(url, analysis_html, detection)
-    if should_try_browser:
-        settings = get_settings()
-        if settings.enable_browser_fallback:
-            detection, analysis_html, screenshot_base64, interaction_used = await _attempt_browser_detection(url)
-            analysis_mode = "browser_fallback"
-            fallback_used = True
-            browser_url = url
+    except (FetchError, UpstreamTimeoutError) as browser_exc:
+        fallback_used = True
+        logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "error": str(browser_exc)})
+        try:
+            html = await fetch_html(url)
+            analysis_html = html
+            detection = detect_auth_component(html)
+            analysis_mode = "static_html"
+            logger.info(
+                "analysis path evaluated",
+                extra={"url": url, "path": "static_fallback", "status": detection.status, "confidence": detection.confidence},
+            )
+        except InvalidContentTypeError:
+            raise
+        except (FetchError, UpstreamTimeoutError) as fetch_exc:
+            detection = DetectionResult(
+                found=False,
+                confidence=0.0,
+                signals=[],
+                snippet=None,
+                message=str(fetch_exc),
+                status="blocked_or_inconclusive",
+                components=[],
+            )
+            logger.info("analysis path evaluated", extra={"url": url, "path": "static_failed", "error": str(fetch_exc)})
 
     ai_used = False
     ai_refined = False
     ai_provider = None
     ai_model = None
-    if ai_fallback_available() and should_use_ai_fallback(detection, browser_used=fallback_used):
+    if ai_fallback_available() and should_use_ai_fallback(detection):
         ai_used = True
-        ai_result = await refine_detection_with_ai(
+        audit = await audit_detection_with_ai(
             url=url,
             html=analysis_html,
             detection=detection,
             screenshot_base64=screenshot_base64,
-            browser_url=browser_url,
         )
-        if ai_result is not None:
-            detection = ai_result.detection
-            ai_refined = ai_result.refined
-            ai_provider = ai_result.provider
-            ai_model = ai_result.model
+        if audit is not None:
+            ai_refined = audit.disagreed
+            ai_provider = audit.provider
+            ai_model = audit.model
+            logger.info(
+                "gemini audit evaluated",
+                extra={
+                    "url": url,
+                    "path": "gemini_audit_ignored",
+                    "disagreed": audit.disagreed,
+                    "audit_status": audit.status,
+                    "audit_confidence": audit.ai_confidence,
+                },
+            )
 
     return AnalysisResult(
         detection=detection,
@@ -102,84 +124,117 @@ async def analyze_url(url: str) -> AnalysisResult:
     )
 
 
-def _should_use_browser_fallback(url: str, html: str, detection: DetectionResult) -> bool:
-    if _is_strong_detection(detection):
-        return False
-
-    if detection.status == "blocked_or_inconclusive":
-        return True
-
-    soup = BeautifulSoup(html, "lxml")
-    form_count = len(soup.find_all("form"))
-    input_count = len(soup.find_all("input"))
-    button_count = len(soup.find_all("button"))
-    script_count = len(soup.find_all("script"))
-    custom_element_count = len(soup.find_all(lambda tag: "-" in tag.name))
-    body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
-
-    app_shell = soup.find(id="root") or soup.find(id="app")
-    title_text = soup.title.get_text(" ", strip=True).lower() if soup.title else ""
-    meta_description = ""
-    description_tag = soup.find("meta", attrs={"name": "description"})
-    if description_tag and description_tag.get("content"):
-        meta_description = description_tag["content"].lower()
-
-    auth_intent = " ".join([url.lower(), title_text, meta_description, body_text.lower()])
-    has_auth_intent = any(hint in auth_intent for hint in AUTH_INTENT_HINTS)
-
-    if detection.status == "found":
-        return True
-    if detection.status == "partial_auth_surface" and detection.confidence < 0.75:
-        return True
-
-    if form_count == 0 and input_count == 0 and button_count == 0:
-        return bool(app_shell or (script_count >= 2 and has_auth_intent) or custom_element_count >= 3)
-
-    return detection.status == "not_found" and has_auth_intent and script_count >= 4
+def _final_snapshot(html: str) -> BrowserMarkupSnapshot:
+    return BrowserMarkupSnapshot(stage="final", html=html, interaction_used=False, typing_used=False)
 
 
-def _is_strong_detection(detection: DetectionResult) -> bool:
-    return detection.status == "found" and detection.confidence >= STRONG_DETECTION_CONFIDENCE
+def _select_best_detection(snapshots: list[BrowserMarkupSnapshot]) -> DetectionResult:
+    evaluated: list[DetectionResult] = []
+    best_detection: Optional[DetectionResult] = None
+    best_rank: Optional[tuple[int, int, int, float, int]] = None
+    best_stage: Optional[str] = None
 
-
-async def _attempt_browser_detection(url: str) -> tuple[DetectionResult, str, Optional[str], bool]:
-    try:
-        browser_result = await render_html(url)
-        interaction_used = browser_result.interaction_used or browser_result.typing_used
-        if is_blocked_or_challenged_html(browser_result.html):
-            detection = DetectionResult(
-                found=False,
-                confidence=0.0,
-                signals=[],
-                snippet=None,
-                message="The site presented an anti-bot or access challenge instead of a login surface.",
-                status="blocked_or_inconclusive",
-                components=[],
-            )
-            logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "reason": "challenge"})
-            return detection, browser_result.html, browser_result.screenshot_base64, interaction_used
-
-        detection = detect_auth_component(browser_result.html)
-        if detection.status == "not_found":
-            detection.status = "blocked_or_inconclusive"
-            detection.message = "Unable to confirm a login surface after browser rendering."
+    for snapshot in snapshots:
+        detection = detect_auth_component(snapshot.html)
+        evaluated.append(detection)
+        rank = _detection_rank(detection)
         logger.info(
-            "analysis path evaluated",
-            extra={"url": url, "path": "browser_fallback", "status": detection.status, "confidence": detection.confidence},
+            "snapshot evaluated",
+            extra={
+                "stage": snapshot.stage,
+                "status": detection.status,
+                "confidence": detection.confidence,
+                "rank": rank,
+            },
         )
-        return detection, browser_result.html, browser_result.screenshot_base64, interaction_used
-    except (FetchError, UpstreamTimeoutError) as exc:
-        detection = DetectionResult(
+        if best_rank is None or rank > best_rank:
+            best_detection = detection
+            best_rank = rank
+            best_stage = snapshot.stage
+
+    if best_detection is None:
+        return DetectionResult(
             found=False,
             confidence=0.0,
             signals=[],
             snippet=None,
-            message=str(exc),
-            status="blocked_or_inconclusive",
+            message="Authentication component not found.",
+            status="not_found",
             components=[],
         )
-        logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "error": str(exc)})
-        return detection, "", None, False
+
+    logger.info(
+        "snapshot selection complete",
+        extra={
+            "winner_stage": best_stage,
+            "winner_status": best_detection.status,
+            "winner_confidence": best_detection.confidence,
+            "winner_primary": choose_primary_component(best_detection.components).type if best_detection.components else None,
+        },
+    )
+    return _merge_detection_components(best_detection, evaluated)
+
+
+def _merge_detection_components(primary_detection: DetectionResult, detections: list[DetectionResult]) -> DetectionResult:
+    merged_components = list(primary_detection.components)
+    seen_keys = {_component_key(component) for component in merged_components}
+
+    for detection in detections:
+        if detection is primary_detection:
+            continue
+        for component in detection.components:
+            key = _component_key(component)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged_components.append(component)
+
+    return DetectionResult(
+        found=primary_detection.found,
+        confidence=primary_detection.confidence,
+        signals=primary_detection.signals,
+        snippet=primary_detection.snippet,
+        message=primary_detection.message,
+        status=primary_detection.status,
+        surface_type=primary_detection.surface_type,
+        fields=primary_detection.fields,
+        actions=primary_detection.actions,
+        providers=primary_detection.providers,
+        components=merged_components,
+        partial_html_markup=primary_detection.partial_html_markup,
+    )
+
+
+def _component_key(component) -> tuple[str, tuple[str, ...], Optional[str]]:
+    return (component.type, tuple(component.providers), component.snippet)
+
+
+def _detection_rank(detection: DetectionResult) -> tuple[int, int, int, float, int]:
+    primary = choose_primary_component(detection.components)
+    component_priority = COMPONENT_PRIORITY.get(primary.type, 0) if primary else 0
+    auth_control_score = _auth_control_score(detection)
+    snippet_length = -(len(detection.snippet or "") or 10_000)
+    return (
+        STATUS_PRIORITY.get(detection.status, 0),
+        component_priority,
+        auth_control_score,
+        detection.confidence,
+        snippet_length,
+    )
+
+
+def _auth_control_score(detection: DetectionResult) -> int:
+    field_score = sum(3 for field in detection.fields if field.type == "password")
+    field_score += sum(2 for field in detection.fields if field.type in {"email", "username", "phone"})
+    action_score = sum(2 for action in detection.actions if action.type == "submit")
+    action_score += sum(2 for action in detection.actions if action.type == "provider")
+    action_score += sum(1 for action in detection.actions if action.type == "continue")
+    signal_score = sum(
+        1
+        for signal in detection.signals
+        if signal in {"password_input", "username_or_email_input", "submit_button", "continue_action", "sso_provider"}
+    )
+    return field_score + action_score + signal_score
 
 
 def is_blocked_or_challenged_html(html: str) -> bool:

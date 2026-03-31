@@ -3,11 +3,11 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
-from .detector import AuthComponent
 from ..core.config import get_settings
+from .detector import AuthComponent
 from .fetcher import FetchError, UpstreamTimeoutError
 
 logger = logging.getLogger(__name__)
@@ -21,11 +21,20 @@ except ImportError:  # pragma: no cover
 
 
 @dataclass
+class BrowserMarkupSnapshot:
+    stage: str
+    html: str
+    interaction_used: bool
+    typing_used: bool
+
+
+@dataclass
 class BrowserRenderResult:
     html: str
     interaction_used: bool
     typing_used: bool
     screenshot_base64: Optional[str] = None
+    snapshots: list[BrowserMarkupSnapshot] = field(default_factory=list)
 
 
 AUTH_TRIGGER_PATTERN = re.compile(
@@ -52,8 +61,18 @@ async def render_html(url: str) -> BrowserRenderResult:
             browser = await playwright.chromium.launch(headless=settings.browser_headless)
             page = await browser.new_page()
             try:
-                interaction_used, typing_used = await _prepare_page(page, url, timeout_ms)
+                snapshots: list[BrowserMarkupSnapshot] = []
+                interaction_used, typing_used = await _prepare_page(page, url, timeout_ms, snapshots)
                 html = await page.content()
+                if not snapshots or snapshots[-1].html != html:
+                    snapshots.append(
+                        BrowserMarkupSnapshot(
+                            stage="final",
+                            html=html,
+                            interaction_used=interaction_used,
+                            typing_used=typing_used,
+                        )
+                    )
                 screenshot_base64 = await _capture_screenshot(page) if settings.enable_ai_screenshot_context else None
             finally:
                 await page.close()
@@ -65,12 +84,13 @@ async def render_html(url: str) -> BrowserRenderResult:
         logger.error("browser render failure", extra={"url": url})
         raise FetchError("Browser fallback failed.") from exc
 
-    logger.info("browser render end", extra={"url": url})
+    logger.info("browser render end", extra={"url": url, "snapshot_count": len(snapshots)})
     return BrowserRenderResult(
         html=html,
         interaction_used=interaction_used,
         typing_used=typing_used,
         screenshot_base64=screenshot_base64,
+        snapshots=snapshots,
     )
 
 
@@ -86,7 +106,7 @@ async def enrich_components_with_browser(url: str, components: list[AuthComponen
             browser = await playwright.chromium.launch(headless=settings.browser_headless)
             page = await browser.new_page()
             try:
-                await _prepare_page(page, url, timeout_ms)
+                await _prepare_page(page, url, timeout_ms, [])
                 enriched = []
                 for component in components:
                     snippet = await _extract_component_html(page, component)
@@ -111,23 +131,25 @@ async def enrich_components_with_browser(url: str, components: list[AuthComponen
         return components
 
 
-async def _prepare_page(page, url: str, timeout_ms: int) -> tuple[bool, bool]:
+async def _prepare_page(page, url: str, timeout_ms: int, snapshots: list[BrowserMarkupSnapshot]) -> tuple[bool, bool]:
     await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+    await _record_snapshot(page, snapshots, "initial_dom", False, False)
     await _wait_for_auth_markup(page, timeout_ms // 2)
+    await _record_snapshot(page, snapshots, "settled_dom", False, False)
 
     checkpoint = await _page_auth_checkpoint(page)
     if checkpoint:
-        logger.info("browser reveal checkpoint", extra={"url": url, "checkpoint": checkpoint, "stage": "passive_wait"})
+        logger.info("browser reveal checkpoint", extra={"url": url, "checkpoint": checkpoint, "stage": "settled_dom"})
         return False, False
 
     interaction_used = False
     typing_used = False
-    settings = get_settings()
-    if settings.enable_limited_auth_reveal:
-        interaction_used, typing_used = await _attempt_auth_reveal(page, timeout_ms)
+    if get_settings().enable_limited_auth_reveal:
+        interaction_used, typing_used = await _attempt_auth_reveal(page, timeout_ms, snapshots)
 
     if not await _page_auth_checkpoint(page):
         await _wait_for_auth_markup(page, timeout_ms)
+        await _record_snapshot(page, snapshots, "final_auth_state", interaction_used, typing_used)
     return interaction_used, typing_used
 
 
@@ -145,7 +167,13 @@ async def _extract_component_html(page, component: AuthComponent) -> Optional[st
         selectors.append(component.selector_hint)
 
     if component.type == "traditional":
-        selectors.extend(["form:has(input[type='password'])", "form"])
+        selectors.extend(
+            [
+                "form:has(input[type='password'])",
+                "[role='dialog']:has(input[type='password'])",
+                "dialog:has(input[type='password'])",
+            ]
+        )
     elif component.type == "oauth":
         for provider in component.providers:
             selectors.extend(
@@ -157,9 +185,22 @@ async def _extract_component_html(page, component: AuthComponent) -> Optional[st
                 ]
             )
     elif component.type == "passwordless":
-        selectors.extend(["button:has-text('Passkey')", "button:has-text('Magic link')", "input[inputmode='numeric']"])
+        selectors.extend(
+            [
+                "button:has-text('Passkey')",
+                "button:has-text('Magic link')",
+                "input[inputmode='numeric']",
+            ]
+        )
     elif component.type == "multi_step":
-        selectors.extend(["form:has(input[type='email'])", "[role='dialog']", "dialog"])
+        selectors.extend(
+            [
+                "form:has(input[type='email'])",
+                "[role='dialog']:has(input[type='email'])",
+                "dialog:has(input[type='email'])",
+                "section:has(input[type='email'])",
+            ]
+        )
 
     for selector in selectors:
         html = await _try_selector(page, selector)
@@ -169,10 +210,6 @@ async def _extract_component_html(page, component: AuthComponent) -> Optional[st
 
 
 async def _try_selector(page, selector: str) -> Optional[str]:
-    try:
-        page.locator(selector).first
-    except Exception:
-        return None
     try:
         loc = page.locator(selector).first
         await loc.wait_for(state="visible", timeout=2000)
@@ -232,8 +269,13 @@ async def _page_auth_checkpoint(page) -> Optional[str]:
             return "provider_cluster";
           }
           const emailField = document.querySelector("input[type='email'], input[name*='email' i], input[id*='email' i], input[autocomplete='username']");
+          const passwordlessButton = Array.from(document.querySelectorAll("button, a, [role='button']"))
+            .find((node) => /passkey|magic link|email me a link|use email/i.test((node.innerText || "") + " " + (node.getAttribute("aria-label") || "")));
           const continueButton = Array.from(document.querySelectorAll("button, a, [role='button']"))
             .find((node) => /continue|next|use email|email me a link|verification code/i.test((node.innerText || "") + " " + (node.getAttribute("aria-label") || "")));
+          if (passwordlessButton) {
+            return "passwordless";
+          }
           if (emailField && continueButton) {
             return "email_first";
           }
@@ -243,11 +285,7 @@ async def _page_auth_checkpoint(page) -> Optional[str]:
     )
 
 
-async def _page_has_auth_surface(page) -> bool:
-    return (await _page_auth_checkpoint(page)) is not None
-
-
-async def _attempt_auth_reveal(page, timeout_ms: int) -> tuple[bool, bool]:
+async def _attempt_auth_reveal(page, timeout_ms: int, snapshots: list[BrowserMarkupSnapshot]) -> tuple[bool, bool]:
     interaction_used = False
     typing_used = False
 
@@ -257,19 +295,19 @@ async def _attempt_auth_reveal(page, timeout_ms: int) -> tuple[bool, bool]:
         return interaction_used, typing_used
 
     stages = [
-        ("auth_trigger", _auth_reveal_locators(page)),
-        ("account_trigger", _account_reveal_locators(page)),
+        ("reveal_auth_trigger", _auth_reveal_locators(page)),
+        ("reveal_account_trigger", _account_reveal_locators(page)),
     ]
 
     for stage_name, locators in stages:
-        stage_clicked = await _click_reveal_locators(page, locators, stage_name, timeout_ms)
+        stage_clicked = await _click_reveal_locators(page, locators, stage_name, timeout_ms, snapshots)
         interaction_used = interaction_used or stage_clicked
         checkpoint = await _page_auth_checkpoint(page)
         if checkpoint:
             logger.info("browser reveal checkpoint", extra={"stage": stage_name, "checkpoint": checkpoint})
             return interaction_used, typing_used
 
-    typed = await _advance_identity_step(page)
+    typed = await _advance_identity_step(page, snapshots)
     typing_used = typing_used or typed
     interaction_used = interaction_used or typed
     checkpoint = await _page_auth_checkpoint(page)
@@ -299,7 +337,7 @@ def _account_reveal_locators(page) -> list:
     ]
 
 
-async def _click_reveal_locators(page, locators: list, stage_name: str, timeout_ms: int) -> bool:
+async def _click_reveal_locators(page, locators: list, stage_name: str, timeout_ms: int, snapshots: list[BrowserMarkupSnapshot]) -> bool:
     clicked = False
     for locator in locators:
         try:
@@ -319,18 +357,17 @@ async def _click_reveal_locators(page, locators: list, stage_name: str, timeout_
                     await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 4000))
                 except PlaywrightTimeoutError:
                     pass
+                await _record_snapshot(page, snapshots, f"{stage_name}_snapshot", True, False)
                 checkpoint = await _page_auth_checkpoint(page)
                 if checkpoint:
-                    logger.info("browser reveal checkpoint", extra={"stage": stage_name, "checkpoint": checkpoint})
                     return clicked
             except Exception:
                 continue
     return clicked
 
 
-async def _advance_identity_step(page) -> bool:
-    settings = get_settings()
-    if not settings.enable_safe_identity_typing:
+async def _advance_identity_step(page, snapshots: list[BrowserMarkupSnapshot]) -> bool:
+    if not get_settings().enable_safe_identity_typing:
         return False
 
     identity_locators = [
@@ -341,19 +378,22 @@ async def _advance_identity_step(page) -> bool:
 
     typed_any = False
     for locator in identity_locators:
-        count = await locator.count()
+        try:
+            count = await locator.count()
+        except Exception:
+            continue
         for index in range(min(count, 2)):
             field = locator.nth(index)
             try:
                 if not await field.is_visible():
                     continue
-                value = await field.input_value()
-                if value:
+                if await field.input_value():
                     continue
                 await field.fill("test@example.com", timeout=2000)
                 typed_any = True
                 logger.info("browser reveal typed identity", extra={"field_index": index})
                 await _click_continue_after_typing(page)
+                await _record_snapshot(page, snapshots, "identity_reveal_snapshot", True, True)
                 break
             except Exception:
                 continue
@@ -369,7 +409,10 @@ async def _click_continue_after_typing(page) -> None:
     ]
 
     for locator in continue_candidates:
-        count = await locator.count()
+        try:
+            count = await locator.count()
+        except Exception:
+            continue
         for index in range(min(count, 3)):
             candidate = locator.nth(index)
             try:
@@ -384,6 +427,29 @@ async def _click_continue_after_typing(page) -> None:
                 return
             except Exception:
                 continue
+
+
+async def _record_snapshot(
+    page,
+    snapshots: list[BrowserMarkupSnapshot],
+    stage: str,
+    interaction_used: bool,
+    typing_used: bool,
+) -> None:
+    try:
+        html = await page.content()
+    except Exception:
+        return
+    if snapshots and snapshots[-1].html == html:
+        return
+    snapshots.append(
+        BrowserMarkupSnapshot(
+            stage=stage,
+            html=html,
+            interaction_used=interaction_used,
+            typing_used=typing_used,
+        )
+    )
 
 
 def _truncate(html: str) -> str:

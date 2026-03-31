@@ -43,13 +43,15 @@ class FakePage:
 
 def test_attempt_auth_reveal_stops_after_auth_trigger(monkeypatch):
     page = FakePage()
+    snapshots = []
 
     monkeypatch.setattr(browser, "_auth_reveal_locators", lambda page: [FakeLocator(page, "auth_trigger")])
     monkeypatch.setattr(browser, "_account_reveal_locators", lambda page: [FakeLocator(page, "account_trigger")])
     monkeypatch.setattr(browser, "_page_auth_checkpoint", lambda page: _async_return(page.checkpoint))
-    monkeypatch.setattr(browser, "_advance_identity_step", lambda page: _async_return(False))
+    monkeypatch.setattr(browser, "_advance_identity_step", lambda page, snapshots: _async_return(False))
+    monkeypatch.setattr(browser, "_record_snapshot", lambda page, snapshots, stage, interaction_used, typing_used: _async_return(None))
 
-    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000))
+    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000, snapshots))
 
     assert interaction_used is True
     assert typing_used is False
@@ -58,13 +60,15 @@ def test_attempt_auth_reveal_stops_after_auth_trigger(monkeypatch):
 
 def test_attempt_auth_reveal_uses_account_trigger_after_auth_trigger_misses(monkeypatch):
     page = FakePage()
+    snapshots = []
 
     monkeypatch.setattr(browser, "_auth_reveal_locators", lambda page: [FakeLocator(page, "auth_trigger", count=0)])
     monkeypatch.setattr(browser, "_account_reveal_locators", lambda page: [FakeLocator(page, "account_trigger")])
     monkeypatch.setattr(browser, "_page_auth_checkpoint", lambda page: _async_return(page.checkpoint))
-    monkeypatch.setattr(browser, "_advance_identity_step", lambda page: _async_return(False))
+    monkeypatch.setattr(browser, "_advance_identity_step", lambda page, snapshots: _async_return(False))
+    monkeypatch.setattr(browser, "_record_snapshot", lambda page, snapshots, stage, interaction_used, typing_used: _async_return(None))
 
-    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000))
+    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000, snapshots))
 
     assert interaction_used is True
     assert typing_used is False
@@ -73,8 +77,9 @@ def test_attempt_auth_reveal_uses_account_trigger_after_auth_trigger_misses(monk
 
 def test_attempt_auth_reveal_uses_identity_step_when_clicks_do_not_reveal(monkeypatch):
     page = FakePage()
+    snapshots = []
 
-    async def fake_advance_identity_step(page):
+    async def fake_advance_identity_step(page, snapshots):
         page.checkpoint = "email_first"
         return True
 
@@ -82,8 +87,9 @@ def test_attempt_auth_reveal_uses_identity_step_when_clicks_do_not_reveal(monkey
     monkeypatch.setattr(browser, "_account_reveal_locators", lambda page: [FakeLocator(page, "account_trigger", count=0)])
     monkeypatch.setattr(browser, "_page_auth_checkpoint", lambda page: _async_return(page.checkpoint))
     monkeypatch.setattr(browser, "_advance_identity_step", fake_advance_identity_step)
+    monkeypatch.setattr(browser, "_record_snapshot", lambda page, snapshots, stage, interaction_used, typing_used: _async_return(None))
 
-    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000))
+    interaction_used, typing_used = __import__("asyncio").run(browser._attempt_auth_reveal(page, 5000, snapshots))
 
     assert interaction_used is True
     assert typing_used is True

@@ -42,6 +42,7 @@ const STATUS_COPY = {
 
 const MODE_COPY = {
   static_html: "Static HTML",
+  browser_primary: "Rendered browser pass",
   browser_fallback: "Rendered browser pass",
 };
 
