@@ -25,14 +25,29 @@ The app uses a Playwright-first, rule-based detection flow:
 1. Accept a URL from the UI or API.
 2. Render the page and capture a few bounded DOM snapshots.
 3. Run deterministic auth detection on each snapshot.
-4. Pick the strongest visible auth surface and return its HTML snippet.
+4. Pick the strongest visible auth surface and return the most relevant snippet plus structured metadata.
 
 ## What The App Returns
 
-- Top-level status such as `found`, `partial_auth_surface`, or `not_found`
-- Best auth-related HTML snippet
-- Structured `components` list with detected auth surface types
-- Metadata about whether browser rendering or fallback fetching was used
+- A top-level status: `found`, `partial_auth_surface`, `blocked_or_inconclusive`, or `not_found`
+- A status label and analysis mode label derived from the backend contract
+- The best auth-related HTML snippet, plus `partial_html_markup` when only a partial auth surface is available
+- Structured `components` metadata, including surface type, providers, fields, and signals
+- Run metadata including `fallback_used`, `interaction_used`, and `protected_page`
+
+### Statuses
+
+- `found`: a strong auth surface was identified
+- `partial_auth_surface`: some auth entry-point evidence was found, but the surface was incomplete
+- `blocked_or_inconclusive`: analysis was limited by a challenge, blocked page, or inconclusive markup
+- `not_found`: no meaningful auth surface was detected
+
+### Analysis Modes
+
+- `browser_primary`: the rendered browser pass produced the final answer
+- `static_html`: the browser path failed and the final answer came from static HTML fetching
+
+`protected_page` is not a separate detector mode. It is a derived flag that is set when the final result is `blocked_or_inconclusive` and the response message indicates a blocked or challenged page.
 
 The app never submits credentials. It only inspects public auth markup.
 
@@ -83,6 +98,16 @@ npm run dev
 
 Frontend runs on `http://localhost:5173`.
 
+### Verification
+
+From the repo root:
+
+```bash
+make check
+```
+
+That runs the backend test suite and the frontend production build using the committed project workflow.
+
 ### Quick API Check
 
 ```bash
@@ -102,7 +127,9 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
   "status": "found",
   "status_label": "Auth surface found",
   "confidence": 0.94,
+  "signals": ["password_input", "username_or_email_input", "submit_button"],
   "snippet": "<form>...</form>",
+  "partial_html_markup": null,
   "message": "Authentication component detected.",
   "analysis_mode": "browser_primary",
   "analysis_mode_label": "Rendered browser pass",
@@ -114,6 +141,13 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
       "type": "traditional",
       "surface_type": "form",
       "confidence": 0.94,
+      "selector_hint": "form",
+      "signals": ["password_input", "username_or_email_input", "submit_button"],
+      "providers": [],
+      "fields": [
+        { "type": "email", "name": "login" },
+        { "type": "password", "name": "password" }
+      ],
       "snippet": "<form>...</form>",
       "summary": "Authentication component detected."
     }
@@ -126,18 +160,29 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 - Python 3.12 recommended
 - Node 18+ recommended
 - Playwright Chromium install required for best results
+- Backend settings come from `backend/.env`, based on `backend/.env.example`
+- Important runtime settings include browser timeout/headless mode, frontend origin, fallback behavior, and limited auth reveal toggles
 
 ## Limitations
 
 - Some sites show CAPTCHA, rate limits, or anti-bot challenges instead of login UI.
 - Some auth flows are region-specific or depend on previous user state.
 - Dynamic pages are handled with Playwright snapshots, but heavily protected sites may still be limited.
+- The backend returns structured `components`, `providers`, `fields`, and snippets; the current frontend emphasizes summary text, snippets, signals, and run metadata rather than a full structured component explorer.
 
 ## Tests
 
+Project-level verification:
+
+```bash
+make check
+```
+
+Backend-only tests:
+
 ```bash
 cd backend
-pytest
+./.venv/bin/pytest
 ```
 
 Current CI checks:
