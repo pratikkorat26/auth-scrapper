@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -9,10 +10,12 @@ from bs4 import BeautifulSoup
 from ..core.config import get_settings
 from .browser import render_html
 from .detector import DetectionResult, detect_auth_component
-from .fetcher import FetchError, UpstreamTimeoutError, fetch_html
+from .fetcher import FetchError, InvalidContentTypeError, UpstreamTimeoutError, fetch_html
 from .gemini import ai_fallback_available, refine_detection_with_ai, should_use_ai_fallback
 
 AUTH_INTENT_HINTS = ("login", "log in", "sign in", "signin", "account", "authenticate")
+STRONG_DETECTION_CONFIDENCE = 0.8
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,55 +31,45 @@ class AnalysisResult:
 
 
 async def analyze_url(url: str) -> AnalysisResult:
-    html = await fetch_html(url)
-    detection = detect_auth_component(html)
     analysis_mode = "static"
     fallback_used = False
     interaction_used = False
     screenshot_base64: Optional[str] = None
-    analysis_html = html
+    analysis_html = ""
     browser_url: Optional[str] = None
+    fetch_error: Optional[Exception] = None
 
-    if detection.status != "found" and _should_use_browser_fallback(url, html, detection):
+    try:
+        html = await fetch_html(url)
+        analysis_html = html
+        detection = detect_auth_component(html)
+        logger.info(
+            "analysis path evaluated",
+            extra={"url": url, "path": "static", "status": detection.status, "confidence": detection.confidence},
+        )
+    except InvalidContentTypeError:
+        raise
+    except (FetchError, UpstreamTimeoutError) as exc:
+        fetch_error = exc
+        detection = DetectionResult(
+            found=False,
+            confidence=0.0,
+            signals=[],
+            snippet=None,
+            message=str(exc),
+            status="blocked_or_inconclusive",
+            components=[],
+        )
+        logger.info("analysis path evaluated", extra={"url": url, "path": "static_failed", "error": str(exc)})
+
+    should_try_browser = fetch_error is not None or _should_use_browser_fallback(url, analysis_html, detection)
+    if should_try_browser:
         settings = get_settings()
         if settings.enable_browser_fallback:
-            try:
-                browser_result = await render_html(url)
-                analysis_mode = "browser_fallback"
-                fallback_used = True
-                interaction_used = browser_result.interaction_used or browser_result.typing_used
-                analysis_html = browser_result.html
-                screenshot_base64 = browser_result.screenshot_base64
-                browser_url = url
-                if is_blocked_or_challenged_html(browser_result.html):
-                    detection = DetectionResult(
-                        found=False,
-                        confidence=0.0,
-                        signals=[],
-                        snippet=None,
-                        message="The site presented an anti-bot or access challenge instead of a login surface.",
-                        status="blocked_or_inconclusive",
-                        components=[],
-                    )
-                else:
-                    browser_detection = detect_auth_component(browser_result.html)
-                    if browser_detection.status == "not_found":
-                        browser_detection.status = "blocked_or_inconclusive"
-                        browser_detection.message = "Unable to confirm a login surface after browser rendering."
-                    detection = browser_detection
-            except (FetchError, UpstreamTimeoutError) as exc:
-                detection = DetectionResult(
-                    found=False,
-                    confidence=0.0,
-                    signals=[],
-                    snippet=None,
-                    message=str(exc),
-                    status="blocked_or_inconclusive",
-                    components=[],
-                )
-                analysis_mode = "browser_fallback"
-                fallback_used = True
-                interaction_used = False
+            detection, analysis_html, screenshot_base64, interaction_used = await _attempt_browser_detection(url)
+            analysis_mode = "browser_fallback"
+            fallback_used = True
+            browser_url = url
 
     ai_used = False
     ai_refined = False
@@ -110,6 +103,9 @@ async def analyze_url(url: str) -> AnalysisResult:
 
 
 def _should_use_browser_fallback(url: str, html: str, detection: DetectionResult) -> bool:
+    if _is_strong_detection(detection):
+        return False
+
     if detection.status == "blocked_or_inconclusive":
         return True
 
@@ -131,13 +127,57 @@ def _should_use_browser_fallback(url: str, html: str, detection: DetectionResult
     auth_intent = " ".join([url.lower(), title_text, meta_description, body_text.lower()])
     has_auth_intent = any(hint in auth_intent for hint in AUTH_INTENT_HINTS)
 
-    if detection.status == "partial_auth_surface":
+    if detection.status in {"partial_auth_surface", "found"}:
         return True
 
     if form_count == 0 and input_count == 0 and button_count == 0:
         return bool(app_shell or (script_count >= 2 and has_auth_intent) or custom_element_count >= 3)
 
     return detection.status == "not_found" and has_auth_intent and script_count >= 4
+
+
+def _is_strong_detection(detection: DetectionResult) -> bool:
+    return detection.status == "found" and detection.confidence >= STRONG_DETECTION_CONFIDENCE
+
+
+async def _attempt_browser_detection(url: str) -> tuple[DetectionResult, str, Optional[str], bool]:
+    try:
+        browser_result = await render_html(url)
+        interaction_used = browser_result.interaction_used or browser_result.typing_used
+        if is_blocked_or_challenged_html(browser_result.html):
+            detection = DetectionResult(
+                found=False,
+                confidence=0.0,
+                signals=[],
+                snippet=None,
+                message="The site presented an anti-bot or access challenge instead of a login surface.",
+                status="blocked_or_inconclusive",
+                components=[],
+            )
+            logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "reason": "challenge"})
+            return detection, browser_result.html, browser_result.screenshot_base64, interaction_used
+
+        detection = detect_auth_component(browser_result.html)
+        if detection.status == "not_found":
+            detection.status = "blocked_or_inconclusive"
+            detection.message = "Unable to confirm a login surface after browser rendering."
+        logger.info(
+            "analysis path evaluated",
+            extra={"url": url, "path": "browser_fallback", "status": detection.status, "confidence": detection.confidence},
+        )
+        return detection, browser_result.html, browser_result.screenshot_base64, interaction_used
+    except (FetchError, UpstreamTimeoutError) as exc:
+        detection = DetectionResult(
+            found=False,
+            confidence=0.0,
+            signals=[],
+            snippet=None,
+            message=str(exc),
+            status="blocked_or_inconclusive",
+            components=[],
+        )
+        logger.info("analysis path evaluated", extra={"url": url, "path": "browser_failed", "error": str(exc)})
+        return detection, "", None, False
 
 
 def is_blocked_or_challenged_html(html: str) -> bool:

@@ -1,5 +1,6 @@
-from app.services.analysis import analyze_url, _should_use_browser_fallback
+from app.services.analysis import STRONG_DETECTION_CONFIDENCE, _is_strong_detection, _should_use_browser_fallback, analyze_url
 from app.services.detector import AuthComponent, DetectionResult
+from app.services.fetcher import FetchError, UpstreamTimeoutError
 from app.services.gemini import AIFallbackResult
 
 
@@ -47,6 +48,35 @@ def test_analyze_url_uses_browser_fallback(monkeypatch) -> None:
     assert result.fallback_used is True
     assert result.interaction_used is True
     assert result.ai_used is False
+
+
+def test_strong_static_detection_skips_browser_fallback() -> None:
+    detection = DetectionResult(
+        found=True,
+        confidence=STRONG_DETECTION_CONFIDENCE,
+        signals=["password_input"],
+        snippet="<form>...</form>",
+        message="Authentication component detected.",
+        status="found",
+        components=[],
+    )
+
+    assert _is_strong_detection(detection) is True
+    assert _should_use_browser_fallback("https://example.com/login", "<html><body></body></html>", detection) is False
+
+
+def test_low_confidence_found_triggers_browser_fallback() -> None:
+    detection = DetectionResult(
+        found=True,
+        confidence=0.61,
+        signals=["password_input"],
+        snippet="<form>...</form>",
+        message="Authentication component detected.",
+        status="found",
+        components=[],
+    )
+
+    assert _should_use_browser_fallback("https://example.com/login", "<html><body><form></form></body></html>", detection) is True
 
 
 def test_analyze_url_uses_ai_for_partial_surface(monkeypatch) -> None:
@@ -116,3 +146,66 @@ def test_analyze_url_keeps_heuristic_result_when_ai_returns_none(monkeypatch) ->
     assert result.detection.status == "partial_auth_surface"
     assert result.ai_used is True
     assert result.ai_refined is False
+
+
+def test_analyze_url_uses_browser_after_fetch_error(monkeypatch) -> None:
+    rendered_html = """
+    <html><body><form><input type="email" name="email" /><input type="password" name="password" /><button type="submit">Login</button></form></body></html>
+    """
+
+    async def fake_fetch_html(_: str) -> str:
+        raise FetchError("Upstream returned status 403.")
+
+    async def fake_render_html(_: str):
+        from app.services.browser import BrowserRenderResult
+
+        return BrowserRenderResult(html=rendered_html, interaction_used=False, typing_used=False, screenshot_base64=None)
+
+    monkeypatch.setattr("app.services.analysis.fetch_html", fake_fetch_html)
+    monkeypatch.setattr("app.services.analysis.render_html", fake_render_html)
+
+    result = __import__("asyncio").run(analyze_url("https://example.com/login"))
+
+    assert result.analysis_mode == "browser_fallback"
+    assert result.fallback_used is True
+    assert result.detection.status == "found"
+
+
+def test_analyze_url_uses_browser_after_timeout(monkeypatch) -> None:
+    rendered_html = """
+    <html><body><form><input type="email" name="email" /><input type="password" name="password" /><button type="submit">Login</button></form></body></html>
+    """
+
+    async def fake_fetch_html(_: str) -> str:
+        raise UpstreamTimeoutError("Request timed out.")
+
+    async def fake_render_html(_: str):
+        from app.services.browser import BrowserRenderResult
+
+        return BrowserRenderResult(html=rendered_html, interaction_used=False, typing_used=False, screenshot_base64=None)
+
+    monkeypatch.setattr("app.services.analysis.fetch_html", fake_fetch_html)
+    monkeypatch.setattr("app.services.analysis.render_html", fake_render_html)
+
+    result = __import__("asyncio").run(analyze_url("https://example.com/login"))
+
+    assert result.analysis_mode == "browser_fallback"
+    assert result.fallback_used is True
+    assert result.detection.status == "found"
+
+
+def test_analyze_url_returns_blocked_when_fetch_and_browser_fail(monkeypatch) -> None:
+    async def fake_fetch_html(_: str) -> str:
+        raise FetchError("Upstream returned status 403.")
+
+    async def fake_render_html(_: str):
+        raise FetchError("Browser fallback failed.")
+
+    monkeypatch.setattr("app.services.analysis.fetch_html", fake_fetch_html)
+    monkeypatch.setattr("app.services.analysis.render_html", fake_render_html)
+
+    result = __import__("asyncio").run(analyze_url("https://example.com/login"))
+
+    assert result.analysis_mode == "browser_fallback"
+    assert result.fallback_used is True
+    assert result.detection.status == "blocked_or_inconclusive"

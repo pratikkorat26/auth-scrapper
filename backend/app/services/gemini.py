@@ -20,6 +20,7 @@ from .detector import (
 )
 
 logger = logging.getLogger(__name__)
+RAW_PREVIEW_LIMIT = 240
 
 try:
     from google import genai
@@ -130,12 +131,21 @@ async def refine_detection_with_ai(
                 temperature=0,
             ),
         )
-        return GeminiDecision.model_validate(json.loads(response.text))
+        raw_text = _extract_response_text(response)
+        payload = _parse_gemini_json(raw_text)
+        normalized = _normalize_gemini_payload(payload, detection)
+        return GeminiDecision.model_validate(normalized)
 
     try:
         decision = await asyncio.to_thread(_call_gemini)
+    except _GeminiParseError as exc:
+        logger.warning(
+            "gemini fallback parse failed",
+            extra={"url": url, "error": str(exc), "stage": exc.stage, "preview": exc.preview},
+        )
+        return None
     except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-        logger.warning("gemini fallback parse failed", extra={"url": url, "error": str(exc)})
+        logger.warning("gemini fallback parse failed", extra={"url": url, "error": str(exc), "stage": "schema_validation"})
         return None
     except Exception as exc:  # pragma: no cover
         logger.warning("gemini fallback failed", extra={"url": url, "error": str(exc)})
@@ -176,12 +186,13 @@ def _build_prompt(url: str, html: str, heuristic_summary: dict, include_screensh
     screenshot_line = "A screenshot of the rendered page is also provided for visual context.\n" if include_screenshot else ""
     return (
         "You identify authentication surfaces on websites.\n"
-        "Return JSON only.\n"
+        "Return a single JSON object only.\n"
+        "Do not include markdown fences, prose, commentary, or explanations.\n"
         "Classify the page as found, partial_auth_surface, not_found, or blocked_or_inconclusive.\n"
         "Return every meaningful auth component you can identify.\n"
         "Component types must be one of: traditional, oauth, passwordless, multi_step, challenge, unknown_auth_surface.\n"
-        "Use selector_hint when you can infer a likely Playwright/CSS selector.\n"
-        "Prefer full form markup in snippet when a form exists. Otherwise return the smallest meaningful auth-related container.\n"
+        "Components are required when status is found or partial_auth_surface.\n"
+        "Do not return selector hints or HTML snippets.\n"
         "Challenge pages such as CAPTCHA or access denied should use type=challenge.\n\n"
         f"URL:\n{url}\n\n"
         f"{screenshot_line}"
@@ -260,3 +271,119 @@ def _is_refined(decision: GeminiDecision, components: list[AuthComponent], basel
             len(components) != len(baseline.components),
         ]
     )
+
+
+class _GeminiParseError(ValueError):
+    def __init__(self, stage: str, message: str, raw_text: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.preview = _preview_raw_text(raw_text)
+
+
+def _extract_response_text(response) -> str:
+    text = getattr(response, "text", None)
+    if text and str(text).strip():
+        return str(text)
+
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            part_text = getattr(part, "text", None)
+            if part_text and str(part_text).strip():
+                return str(part_text)
+
+    raise _GeminiParseError("response_text_missing", "Gemini returned no parseable text.", None)
+
+
+def _parse_gemini_json(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, re.IGNORECASE)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(cleaned[start : end + 1])
+            except json.JSONDecodeError as exc:
+                raise _GeminiParseError("json_decode", "Gemini returned invalid JSON.", raw_text) from exc
+        raise _GeminiParseError("json_decode", "Gemini returned invalid JSON.", raw_text)
+
+
+def _normalize_gemini_payload(payload: dict, baseline: DetectionResult) -> dict:
+    if not isinstance(payload, dict):
+        raise _GeminiParseError("normalization_failed", "Gemini payload was not a JSON object.")
+
+    normalized = dict(payload)
+    normalized["status"] = _normalize_status(normalized.get("status"), baseline.status)
+    normalized["message"] = str(normalized.get("message") or _default_message_for_status(normalized["status"]))
+    normalized["confidence"] = _normalize_confidence(normalized.get("confidence"), baseline.confidence)
+
+    components = normalized.get("components")
+    if not isinstance(components, list):
+        components = []
+    normalized["components"] = components
+
+    if normalized["status"] in {"found", "partial_auth_surface"} and not normalized["components"]:
+        normalized["components"] = [_baseline_component_payload(component) for component in baseline.components]
+
+    return normalized
+
+
+def _normalize_status(status: object, fallback_status: str) -> str:
+    candidate = str(status or "").strip().lower()
+    aliases = {
+        "found": "found",
+        "partial": "partial_auth_surface",
+        "partial_auth_surface": "partial_auth_surface",
+        "inconclusive": "blocked_or_inconclusive",
+        "blocked": "blocked_or_inconclusive",
+        "blocked_or_inconclusive": "blocked_or_inconclusive",
+        "not_found": "not_found",
+        "none": "not_found",
+    }
+    return aliases.get(candidate, fallback_status if fallback_status in aliases.values() else "not_found")
+
+
+def _normalize_confidence(value: object, fallback_confidence: float) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        confidence = fallback_confidence if fallback_confidence > 0 else 0.5
+    return max(0.0, min(confidence, 1.0))
+
+
+def _default_message_for_status(status: str) -> str:
+    return {
+        "found": "Authentication component detected.",
+        "partial_auth_surface": "Partial authentication surface detected.",
+        "blocked_or_inconclusive": "The page appears blocked or inconclusive.",
+        "not_found": "Authentication component not found.",
+    }.get(status, "Authentication component not found.")
+
+
+def _baseline_component_payload(component: AuthComponent) -> dict:
+    return {
+        "type": component.type,
+        "surface_type": component.surface_type,
+        "confidence": component.confidence,
+        "selector_hint": component.selector_hint,
+        "providers": component.providers,
+        "summary": component.summary or "Authentication component",
+        "snippet": None,
+    }
+
+
+def _preview_raw_text(raw_text: Optional[str]) -> Optional[str]:
+    if raw_text is None:
+        return None
+    sanitized = re.sub(r"\s+", " ", raw_text).strip()
+    if len(sanitized) > RAW_PREVIEW_LIMIT:
+        sanitized = sanitized[:RAW_PREVIEW_LIMIT].rstrip() + "..."
+    return sanitized or None

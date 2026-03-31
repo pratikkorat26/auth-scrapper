@@ -5,6 +5,9 @@ from pydantic import ValidationError
 from app.services.detector import AuthComponent, DetectionResult
 from app.services.gemini import (
     GeminiDecision,
+    _extract_response_text,
+    _normalize_gemini_payload,
+    _parse_gemini_json,
     ai_fallback_available,
     extract_relevant_sections,
     should_use_ai_fallback,
@@ -66,3 +69,70 @@ def test_gemini_decision_requires_components_for_auth_outcome() -> None:
         pass
     else:
         raise AssertionError("Expected ValidationError")
+
+
+def test_parse_gemini_json_accepts_plain_json_object() -> None:
+    payload = _parse_gemini_json('{"status":"found","message":"Detected","confidence":0.8,"components":[]}')
+    assert payload["status"] == "found"
+
+
+def test_parse_gemini_json_accepts_code_fence() -> None:
+    payload = _parse_gemini_json(
+        '```json\n{"status":"not_found","message":"No auth","confidence":0.2,"components":[]}\n```'
+    )
+    assert payload["status"] == "not_found"
+
+
+def test_parse_gemini_json_accepts_extra_prose() -> None:
+    payload = _parse_gemini_json(
+        'Here is the result:\n{"status":"partial","message":"Maybe auth","confidence":0.6,"components":[]}\nThank you.'
+    )
+    assert payload["status"] == "partial"
+
+
+def test_normalize_gemini_payload_fills_missing_components_from_baseline() -> None:
+    baseline = DetectionResult(
+        found=True,
+        confidence=0.72,
+        signals=["sso_provider"],
+        snippet="<section>...</section>",
+        message="Partial authentication surface detected.",
+        status="partial_auth_surface",
+        components=[
+            AuthComponent("oauth", "sso_only", 0.72, None, ["sso_provider"], ["Google"], [], "<section>...</section>", "OAuth")
+        ],
+    )
+
+    normalized = _normalize_gemini_payload({"status": "found", "message": "Detected"}, baseline)
+
+    assert normalized["status"] == "found"
+    assert normalized["components"]
+    assert normalized["confidence"] == 0.72
+
+
+def test_normalize_gemini_payload_fills_missing_message_and_confidence() -> None:
+    baseline = DetectionResult(
+        found=False,
+        confidence=0.0,
+        signals=[],
+        snippet=None,
+        message="Authentication component not found.",
+        status="not_found",
+        components=[],
+    )
+
+    normalized = _normalize_gemini_payload({"status": "blocked"}, baseline)
+
+    assert normalized["status"] == "blocked_or_inconclusive"
+    assert normalized["message"] == "The page appears blocked or inconclusive."
+    assert normalized["confidence"] == 0.5
+
+
+def test_extract_response_text_reads_fallback_candidate_parts() -> None:
+    response = SimpleNamespace(
+        text="",
+        candidates=[SimpleNamespace(content=SimpleNamespace(parts=[SimpleNamespace(text='{"status":"not_found","message":"No auth","confidence":0.2,"components":[]}')]))],
+    )
+
+    extracted = _extract_response_text(response)
+    assert '"status":"not_found"' in extracted
