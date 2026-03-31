@@ -162,6 +162,7 @@ Then open the frontend, paste a public URL, and inspect the returned auth markup
 - Playwright Chromium install required for best results
 - Backend settings come from `backend/.env`, based on `backend/.env.example`
 - Important runtime settings include browser timeout/headless mode, frontend origin, fallback behavior, and limited auth reveal toggles
+- `VITE_API_BASE_URL` is optional for same-origin deployments such as a single Docker container
 
 ## Limitations
 
@@ -194,3 +195,4 @@ Current CI checks:
 
 - [Assessment Summary](docs/assessment-summary.md)
 - [Tested Sites Evidence](docs/tested-sites.md)
+- [DigitalOcean Droplet Docker Deployment](docs/digitalocean-droplet.md)

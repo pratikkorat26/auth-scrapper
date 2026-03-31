@@ -13,7 +13,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const isBackendConfigured = import.meta.env.DEV || Boolean(import.meta.env.VITE_API_BASE_URL);
+  const usesSeparateApiOrigin = Boolean(import.meta.env.VITE_API_BASE_URL);
 
   useEffect(() => {
     if (!isModalOpen) {
@@ -72,11 +72,11 @@ export default function App() {
         <UrlForm url={url} onChange={setUrl} onSubmit={handleSubmit} isLoading={isLoading} />
         <StatusBanner
           type="info"
-          kicker="Frontend deployed"
+          kicker="Deployment mode"
           message={
-            isBackendConfigured
-              ? ""
-              : "This Vercel deployment is ready, but the backend is not connected yet. Add VITE_API_BASE_URL in Vercel after the backend is live."
+            usesSeparateApiOrigin
+              ? "This deployment is configured to call a separate backend origin through VITE_API_BASE_URL."
+              : "This deployment will call the backend on the same origin. In split deployments, set VITE_API_BASE_URL to override that default."
           }
         />
         <StatusBanner type="error" message={error} />
