@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { analyzeUrl } from "./api/client";
 import AnalysisFlowModal from "./components/AnalysisFlowModal";
 import ResultCard from "./components/ResultCard";
+import StatusBanner from "./components/StatusBanner";
 import UrlForm from "./components/UrlForm";
 import "./styles.css";
 
