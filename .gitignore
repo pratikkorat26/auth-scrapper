@@ -1,5 +1,8 @@
 .DS_Store
 .env
+.env.*
+**/.env
+**/.env.local
 .venv/
 __pycache__/
 *.pyc
@@ -7,4 +10,3 @@ __pycache__/
 .coverage
 dist/
 node_modules/
-

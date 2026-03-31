@@ -1,6 +1,6 @@
 # Auth Detector
 
-A small full-stack application that analyzes a public web page and tries to find a likely authentication or login component using deterministic HTML rules.
+A full-stack authentication detection app that analyzes a public web page, renders dynamic routes when needed, and returns login-related HTML snippets plus a list of detected authentication components.
 
 ## Overview
 
@@ -8,32 +8,34 @@ A small full-stack application that analyzes a public web page and tries to find
 - Frontend: React with Vite
 - HTML parsing: BeautifulSoup with `lxml`
 - HTTP client: `httpx`
-- Dynamic-page fallback: Playwright
+- Browser rendering: Playwright
+- AI fallback: Gemini (`google-genai`)
 
-The user submits a URL. The backend fetches the HTML, parses it, scores likely authentication components, and returns the strongest matching HTML snippet or a not-found result.
+The app accepts a URL, fetches the page, runs deterministic auth detection first, optionally renders the page in Playwright, and uses Gemini for low-confidence or dynamic auth surfaces. The response includes a primary snippet and a `components` array with all detected auth surfaces.
 
 ## Architecture
 
 - `backend/`
-  - FastAPI API with configuration, structured logging, fetch service, detector service, and pytest coverage
+  - FastAPI app with fetch, detector, browser, and Gemini services
 - `frontend/`
-  - Single-page React app that calls the API and renders the analysis result
+  - Single-page UI for URL submission and result inspection
 - `.github/workflows/ci.yml`
-  - Minimal CI for backend tests and frontend build
+  - Backend pytest and frontend production build
 
 ## Detection Flow
 
-1. Validate and normalize a user-provided URL.
-2. Fetch the document with `httpx` using async requests, redirects, and a timeout.
-3. Confirm the response is HTML.
-4. Parse the HTML with BeautifulSoup.
-5. Score candidate elements using simple rule-based signals:
-   - contains a password input
-   - contains a likely username or email input nearby
-   - contains a submit button
-   - contains login or auth keywords in text or attributes
-6. If the static HTML looks like an empty JavaScript app shell, optionally render it in a headless browser and rerun the same detector on the hydrated DOM.
-7. Return a structured auth-surface result with status, extracted fields/actions/providers, analysis mode, and HTML snippet.
+1. Validate the submitted URL.
+2. Fetch HTML with `httpx`.
+3. Parse it with BeautifulSoup and score heuristic auth candidates.
+4. If the page looks dynamic or incomplete, render it with Playwright and rerun detection on the rendered DOM.
+5. If the result is partial, inconclusive, or low-confidence, call Gemini with:
+   - extracted auth-focused HTML
+   - the heuristic summary
+   - an optional Playwright screenshot
+6. Normalize Gemini output into:
+   - a primary auth snippet
+   - multiple auth components
+   - top-level status and confidence
 
 ## Setup
 
@@ -84,35 +86,65 @@ curl -X POST http://localhost:8000/api/v1/analyze \
   "url": "https://github.com/login",
   "found": true,
   "status": "found",
-  "confidence": 0.95,
-  "signals": [
-    "password_input",
-    "username_or_email_input",
-    "submit_button",
-    "auth_keyword"
-  ],
+  "confidence": 0.94,
+  "signals": ["password_input", "username_or_email_input"],
   "snippet": "<form>...</form>",
   "message": "Authentication component detected.",
   "analysis_mode": "static",
   "fallback_used": false,
   "interaction_used": false,
-  "surface_type": "form",
-  "fields": [
+  "ai_used": false,
+  "ai_refined": false,
+  "ai_provider": null,
+  "ai_model": null,
+  "components": [
     {
-      "type": "email",
-      "label": "Username or email address",
-      "name": "login"
+      "type": "traditional",
+      "surface_type": "form",
+      "confidence": 0.94,
+      "selector_hint": "form",
+      "signals": ["password_input", "username_or_email_input"],
+      "providers": [],
+      "fields": [
+        {
+          "type": "email",
+          "label": "Username or email address",
+          "name": "login"
+        }
+      ],
+      "snippet": "<form>...</form>",
+      "summary": "Traditional login form"
     }
-  ],
-  "actions": [
-    {
-      "type": "submit",
-      "label": "Sign in"
-    }
-  ],
-  "providers": [],
-  "alternate_candidates": []
+  ]
 }
+```
+
+## Configuration
+
+Relevant backend environment variables:
+
+- `APP_ENV`
+- `LOG_LEVEL`
+- `REQUEST_TIMEOUT_SECONDS`
+- `MAX_SNIPPET_LENGTH`
+- `FRONTEND_ORIGIN`
+- `ENABLE_BROWSER_FALLBACK`
+- `BROWSER_TIMEOUT_SECONDS`
+- `BROWSER_HEADLESS`
+- `ENABLE_LIMITED_AUTH_REVEAL`
+- `ENABLE_SAFE_IDENTITY_TYPING`
+- `ENABLE_AI_FALLBACK`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `AI_LOW_CONFIDENCE_THRESHOLD`
+- `AI_MAX_INPUT_CHARS`
+- `ENABLE_AI_SCREENSHOT_CONTEXT`
+
+Gemini fallback is disabled by default. Enable it by setting:
+
+```env
+ENABLE_AI_FALLBACK=true
+GEMINI_API_KEY=your-key
 ```
 
 ## Running Tests
@@ -122,70 +154,36 @@ cd backend
 pytest
 ```
 
-## Browser Fallback Setup
+## Detection Logic Notes
 
-Some login pages render entirely in JavaScript. To support those, install the Playwright Chromium browser once:
+- `traditional`: password form or equivalent final login form
+- `oauth`: social/SSO provider auth cluster
+- `passwordless`: passkey, magic-link, OTP, or WebAuthn style auth
+- `multi_step`: email-first or username-first auth surface
+- `challenge`: blocked, captcha, or anti-bot challenge surface
 
-```bash
-cd backend
-.venv/bin/python -m playwright install chromium
-```
+The top-level `snippet` is selected from the highest-priority component in this order:
 
-Relevant environment variables:
-
-- `ENABLE_BROWSER_FALLBACK`
-- `BROWSER_TIMEOUT_SECONDS`
-- `BROWSER_HEADLESS`
-
-## Live Validation Report
-
-Run the live-site validation batch from the backend without starting the API server:
-
-```bash
-cd backend
-.venv/bin/python -m app.validation.runner
-```
-
-The report classifies each target as:
-
-- `pass`: authentication markup was detected
-- `partial`: an auth surface was found, but it looked like SSO-first, email-first, or otherwise incomplete
-- `miss`: the page fetched successfully, but the detector did not find auth markup
-- `inconclusive`: the site timed out, blocked the request, redirected unexpectedly, or otherwise could not be judged fairly
-
-This validation flow is intentionally local-only and is not part of GitHub Actions because third-party sites can change markup, rate-limit, or block automated requests.
-
-## Benchmark Snapshot
-
-Representative results from the current benchmark set:
-
-| Site | Category | Result | Notes |
-| --- | --- | --- | --- |
-| GitHub | SaaS | `pass` | Strong static detection |
-| Box | SaaS | `pass` | Static detection plus SSO signals |
-| Facebook | Social | `pass` | Strong static detection |
-| LinkedIn | Social | `pass` | Strong static detection |
-| Times of India | News | `pass` | Static password form |
-| Substack | Blogs | `partial` | Browser fallback reveals an auth surface without a clear final password step |
-| Reddit | Blogs | `inconclusive` | Dynamic route timed out during browser fallback |
-| Flipkart | E-Commerce | `inconclusive` | Generic auth-like surface but not enough evidence for a confident login form |
-| NDTV | News | `inconclusive` | Upstream returned `403` |
+1. `traditional`
+2. `multi_step`
+3. `oauth`
+4. `passwordless`
+5. `challenge`
 
 ## Limitations
 
-- Static detection works best on classic forms; dynamic pages may require browser fallback and limited safe interaction.
-- Some modern auth flows are SSO-first or multi-step, so they may return `partial_auth_surface` instead of a final password form.
-- Anti-bot protection, rate limiting, gated routes, or delayed client rendering can still produce `blocked_or_inconclusive`.
-- Confidence is heuristic and deterministic, not learned.
-- The fetcher intentionally accepts only HTML responses over `http` or `https`.
+- Some sites block automation or show challenge pages instead of auth UI.
+- Gemini improves hard-page coverage, but it adds latency and depends on API availability.
+- Selector hints returned by AI are best-effort hints, not guaranteed stable selectors.
+- The app intentionally detects auth components only; it never submits credentials.
 
 ## Example Websites To Try
 
 1. `https://github.com/login`
-2. `https://gitlab.com/users/sign_in`
+2. `https://account.box.com/login`
 3. `https://www.reddit.com/login/`
-4. `https://stackoverflow.com/users/login`
-5. `https://example.com`
+4. `https://substack.com/sign-in`
+5. `https://apply.coveredca.com/static/lw-web/login`
 
 ## CI
 

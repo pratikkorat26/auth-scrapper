@@ -1,9 +1,39 @@
+function SnippetViewer({ title, snippet, compact = false }) {
+  const lines = snippet ? snippet.split("\n") : [];
+
+  return (
+    <div className={`snippet-block${compact ? " snippet-block-compact" : ""}`}>
+      <div className="snippet-header">
+        {compact ? <h4>{title}</h4> : <h3>{title}</h3>}
+        <span className="snippet-language">HTML</span>
+      </div>
+      <div className={`snippet-viewer${compact ? " snippet-viewer-compact" : ""}`} aria-label={`${title} viewer`}>
+        {lines.length ? (
+          <pre className={`snippet-code${compact ? " snippet-code-compact" : ""}`}>
+            <code>
+              {lines.map((line, index) => (
+                <span className="snippet-line" key={`${title}-${index}-${line}`}>
+                  <span className="snippet-line-number" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <span className="snippet-line-content">{line || " "}</span>
+                </span>
+              ))}
+            </code>
+          </pre>
+        ) : (
+          <div className="snippet-empty">No HTML snippet returned.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ResultCard({ result }) {
   if (!result) {
     return null;
   }
 
-  const snippetLines = result.snippet ? result.snippet.split("\n") : [];
   const statusLabel = result.status?.replaceAll("_", " ") || (result.found ? "found" : "not found");
 
   return (
@@ -20,7 +50,9 @@ export default function ResultCard({ result }) {
         <div className="summary-chip">Confidence {result.confidence}</div>
         {result.fallback_used ? <div className="summary-chip">Fallback Used</div> : null}
         {result.interaction_used ? <div className="summary-chip">Interaction Reveal</div> : null}
-        {result.surface_type ? <div className="summary-chip">{result.surface_type.replaceAll("_", " ")}</div> : null}
+        {result.ai_used ? <div className="summary-chip">Gemini Used</div> : null}
+        {result.ai_refined ? <div className="summary-chip">Gemini Refined</div> : null}
+        {result.ai_provider ? <div className="summary-chip">{result.ai_provider}</div> : null}
       </div>
 
       <dl className="result-grid">
@@ -42,47 +74,7 @@ export default function ResultCard({ result }) {
         </div>
       </dl>
 
-      {result.alternate_candidates?.length ? (
-        <section className="alternate-panel">
-          <h3>Alternate Candidates</h3>
-          <ul className="alternate-list">
-            {result.alternate_candidates.map((candidate, index) => (
-              <li key={`${candidate.surface_type}-${index}`}>
-                <strong>{candidate.surface_type.replaceAll("_", " ")}</strong>
-                <span>
-                  {candidate.status.replaceAll("_", " ")} • confidence {candidate.confidence}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <div className="snippet-block">
-        <div className="snippet-header">
-          <h3>Snippet</h3>
-          <span className="snippet-language">HTML</span>
-        </div>
-
-        <div className="snippet-viewer" aria-label="HTML snippet viewer">
-          {snippetLines.length ? (
-            <pre className="snippet-code">
-              <code>
-                {snippetLines.map((line, index) => (
-                  <span className="snippet-line" key={`${index}-${line}`}>
-                    <span className="snippet-line-number" aria-hidden="true">
-                      {index + 1}
-                    </span>
-                    <span className="snippet-line-content">{line || " "}</span>
-                  </span>
-                ))}
-              </code>
-            </pre>
-          ) : (
-            <div className="snippet-empty">No HTML snippet returned.</div>
-          )}
-        </div>
-      </div>
+      <SnippetViewer title="Primary Snippet" snippet={result.snippet} />
     </section>
   );
 }

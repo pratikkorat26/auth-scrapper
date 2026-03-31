@@ -34,8 +34,8 @@ export default function App() {
         <p className="eyebrow">AI Engineer Assessment</p>
         <h1>Authentication Component Detector</h1>
         <p className="lead">
-          Submit a public website URL and inspect the strongest login-related HTML snippet the backend can
-          detect with deterministic parsing rules.
+          Submit a public website URL and inspect the authentication components the backend can detect with
+          deterministic parsing, Playwright rendering, and Gemini fallback for harder pages.
         </p>
       </section>
 
@@ -45,4 +45,3 @@ export default function App() {
     </main>
   );
 }
-
